@@ -784,3 +784,132 @@ pub fn problem[&h, &s, &b, &t, &e, &m](heap: &!h Heap, s: &s Schema, body: &b [b
     w = json.end_object(heap, w);
     return json.finish(w);
 }
+
+// ---------------------------------------------------------------------
+// JSON Schema (2020-12, which is what OpenAPI 3.1 uses)
+// ---------------------------------------------------------------------
+
+// The type keyword for a node: `"string"`, or `["string","null"]` if it may be
+// `null`. (A nullable *choice* is `enum` with `null` among its members, below:
+// `enum` applies to every type in JSON Schema, so that is the only way to say it.)
+fn write_type[&h](heap: &!h Heap, w: json.Writer, name: &static [byte], nullable: bool) -> [heap] json.Writer {
+    var o = json.put_key(heap, w, "type");
+    if nullable {
+        o = json.begin_array(heap, o);
+        o = json.put_string(heap, o, name);
+        o = json.put_string(heap, o, "null");
+        o = json.end_array(heap, o);
+    } else {
+        o = json.put_string(heap, o, name);
+    }
+    return o;
+}
+
+fn write_node[&h, &s](heap: &!h Heap, sc: &s Schema, node: int, w: json.Writer) -> [heap] json.Writer {
+    let kind = node_at(sc, node, 0);
+    let nullable = node_at(sc, node, 1) & flag_nullable() != 0;
+    var o = json.begin_object(heap, w);
+    if kind == kind_bool() {
+        o = write_type(heap, o, "boolean", nullable);
+    } else if kind == kind_number() {
+        o = write_type(heap, o, "number", nullable);
+    } else if kind == kind_int() {
+        o = write_type(heap, o, "integer", nullable);
+        if node_at(sc, node, 2) != int_min() {
+            o = json.put_key(heap, o, "minimum");
+            o = json.put_int(heap, o, node_at(sc, node, 2));
+        }
+        if node_at(sc, node, 3) != int_max() {
+            o = json.put_key(heap, o, "maximum");
+            o = json.put_int(heap, o, node_at(sc, node, 3));
+        }
+    } else if kind == kind_string() {
+        o = write_type(heap, o, "string", nullable);
+        let lo = node_at(sc, node, 2);
+        let hi = node_at(sc, node, 3);
+        if lo > 0 {
+            o = json.put_key(heap, o, "minLength");
+            o = json.put_int(heap, o, lo);
+        }
+        if hi != int_max() {
+            o = json.put_key(heap, o, "maxLength");
+            o = json.put_int(heap, o, hi);
+        }
+        // `minLength`/`maxLength` count code points in JSON Schema; this
+        // validator counts bytes of the decoded text (`docs/design.md` §9). The two
+        // agree for ASCII, so a document that is not says which one it means.
+        if lo > 0 || hi != int_max() {
+            o = json.put_key(heap, o, "x-length-unit");
+            o = json.put_string(heap, o, "bytes");
+        }
+        if node_at(sc, node, 4) >= 0 {
+            o = json.put_key(heap, o, "enum");
+            o = json.begin_array(heap, o);
+            var m = node_at(sc, node, 4);
+            let pool = buffer.bytes(sc.text);
+            while m >= 0 {
+                let off = vec.get(sc.members, m * member_width());
+                let n = vec.get(sc.members, m * member_width() + 1);
+                o = json.put_string(heap, o, pool[off..off + n]);
+                m = vec.get(sc.members, m * member_width() + 2);
+            }
+            if nullable {
+                o = json.put_null(heap, o);
+            }
+            o = json.end_array(heap, o);
+        }
+    } else if kind == kind_array() {
+        o = write_type(heap, o, "array", nullable);
+        o = json.put_key(heap, o, "items");
+        o = write_node(heap, sc, node_at(sc, node, 2), o);
+        if node_at(sc, node, 3) > 0 {
+            o = json.put_key(heap, o, "minItems");
+            o = json.put_int(heap, o, node_at(sc, node, 3));
+        }
+        if node_at(sc, node, 4) != int_max() {
+            o = json.put_key(heap, o, "maxItems");
+            o = json.put_int(heap, o, node_at(sc, node, 4));
+        }
+    } else if kind == kind_object() {
+        o = write_type(heap, o, "object", nullable);
+        o = json.put_key(heap, o, "properties");
+        o = json.begin_object(heap, o);
+        var f = node_at(sc, node, 2);
+        var required = 0;
+        while f >= 0 {
+            o = json.put_key(heap, o, field_name(sc, f));
+            o = write_node(heap, sc, vec.get(sc.fields, f * field_width() + 2), o);
+            required = required + vec.get(sc.fields, f * field_width() + 3);
+            f = vec.get(sc.fields, f * field_width() + 4);
+        }
+        o = json.end_object(heap, o);
+        if required > 0 {
+            o = json.put_key(heap, o, "required");
+            o = json.begin_array(heap, o);
+            f = node_at(sc, node, 2);
+            while f >= 0 {
+                if vec.get(sc.fields, f * field_width() + 3) == 1 {
+                    o = json.put_string(heap, o, field_name(sc, f));
+                }
+                f = vec.get(sc.fields, f * field_width() + 4);
+            }
+            o = json.end_array(heap, o);
+        }
+        if node_at(sc, node, 4) == 1 {
+            o = json.put_key(heap, o, "additionalProperties");
+            o = json.put_bool(heap, o, false);
+        }
+    }
+    return json.end_object(heap, o);
+}
+
+// The JSON Schema for schema node `root`, compact. Deterministic: members, fields
+// and `required` come out in the order they were added, so the same schema is the
+// same bytes on every run and can be hashed, diffed and checked in.
+//
+// It says what `validate` accepts, with one disclosed difference: string length
+// (see `x-length-unit` above). A nullable string with choices lists `null` among
+// its `enum` members, because `enum` constrains every type.
+pub fn json_schema[&h, &s](heap: &!h Heap, sc: &s Schema, root: int) -> [heap] buffer.Buffer {
+    return json.finish(write_node(heap, sc, root, json.writer(heap, 256)));
+}

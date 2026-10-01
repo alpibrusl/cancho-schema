@@ -1,8 +1,9 @@
 # lexsys-schema
 
-> **Status: slice 1 built** -- the schema builder, the validator, JSON-pointer
-> error locations and `problem+json`, in [`src/schema.ls`](src/schema.ls). Not yet
-> built: JSON Schema / OpenAPI generation (slice 2). [`docs/design.md`](docs/design.md)
+> **Status: slices 1 and 2 built** -- the schema builder, the validator,
+> JSON-pointer error locations, `problem+json`, and JSON Schema generation, in
+> [`src/schema.ls`](src/schema.ls). Not yet built: assembling an OpenAPI document
+> (that is `lexsys-web`'s, from its routes plus these fragments). [`docs/design.md`](docs/design.md)
 > says what will be and marks every claim as measured or not; §9 there is what
 > building the first slice found.
 
@@ -43,19 +44,23 @@ s = schema.add_field(heap, s, user, "age", age, false);
 // per request: parse with std.json, then
 let n = schema.validate(sc, user, body, tape, slots, errs);   // 0: it has the shape
 let problem = schema.problem(heap, sc, body, tape, errs, 422, "Unprocessable Content");
+// and the same declaration as JSON Schema 2020-12 (what OpenAPI 3.1 uses):
+let doc = schema.json_schema(heap, sc, user);
 ```
 
 ## Tests
 
 ```
-lex-sys test tests/schema_test.ls src/schema.ls --std          # 13 unit tests
+lex-sys test tests/schema_test.ls src/schema.ls --std          # 16 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 
 The differential test generates random (schema, document) pairs, builds each
 schema both as JSON Schema and as a lex-sys program, and compares the *set of
-(pointer, code)* the two report. 250 cases on each of 18 seeds agree. Both
-suites are mutation-checked: a deliberate off-by-one in a bound, in the escaping
+(pointer, code)* the two report. 250 cases on each of 24 seeds agree. The same
+test also checks the generated JSON Schema: it must equal the schema the generator
+meant, and must give the reference the same verdicts the library's own validator
+gave. Both suites are mutation-checked: a deliberate off-by-one in a bound, in the escaping
 of `~`, in the unknown-key check, or in the item counts fails them.
 
 Tested against `lex-sys` at `c5ee956` (a store records no hash of the `std` it
