@@ -153,15 +153,14 @@ published against (`package-system.md` §4.8). This repository will record the
 
 ## 9. What building slice 1 found
 
-**Answered open question 2: string length is in bytes of the decoded text.**
-Counting code points of an escaped string needs somewhere to decode it into, and
-`validate` is deliberately heapless (`lex-sys authority` on a program that
-validates reports `heap` from the caller's own allocations and nothing else). A
-plain string could be counted with `utf8.count` for free; one with escapes
-cannot, and two rules for one field would be worse than one. For ASCII the two
-agree. The differential test keeps length-bounded strings ASCII for that reason,
-and the divergence from JSON Schema's `maxLength` (code points) is real and
-documented here, not hidden.
+**Open question 2, string length: first answered "bytes", then corrected (§12).**
+Slice 1 counted the bytes of the decoded text, reasoning that counting code points
+of an escaped string needs somewhere to decode it and the validator has no heap.
+That reasoning was wrong -- the source text can be counted without decoding it --
+and the answer was wrong for clients: JSON Schema's `maxLength` counts code points,
+so a 16-character tag of Japanese was refused as 48 bytes. §12 has the fix; the
+text that stood here said bytes and said the divergence was disclosed. It was
+disclosed in a keyword no client reads.
 
 **§3 said number bounds were in v1; they are not.** `bits_of` reads a float's
 bits but the language has no inverse, so a `Vec[int]` arena cannot hold a float
@@ -212,13 +211,9 @@ library's own validator reported. Six deliberate breakages of the generator
 `maximum`, invert `required`, off-by-one `minLength`, and the others in the
 README's list) each fail it; and 24 seeds of 250 cases agree.
 
-**One disclosed difference that cannot be removed.** `minLength`/`maxLength` in
-JSON Schema count code points; this validator counts bytes (§9). A schema that
-only said `maxLength: 8` would promise clients something the server does not do
-for non-ASCII text, so a string with a length bound also carries
-`"x-length-unit": "bytes"`. JSON Schema validators ignore unknown keywords, so it
-costs nothing, and the divergence is stated in the document the client reads
-rather than only here. Closing it needs code points (§8.2), which needs a heap.
+**(Corrected in §12.)** This section first said one difference could not be
+removed: string length in bytes, disclosed by an `x-length-unit` keyword. It could
+be removed, the keyword is gone, and the generated schema is plain JSON Schema.
 
 **A nullable choice lists `null` in its `enum`** (§9's note to this slice, done):
 `{"type":["string","null"],"enum":["red","green",null]}`.
@@ -267,3 +262,28 @@ on every seed.
 **Also found, in `lexsys-web`'s example rather than here** (recorded there): an
 unknown query parameter had to be refused for the same reason unknown body fields
 are, and the document had to state the integer maximum the server enforces.
+
+## 12. A second defect from the same service: string length
+
+The same Schemathesis run, once `150.0` was fixed, sent `"tags": ["日本語…"]`
+(sixteen characters, forty-eight bytes) against a `maxLength: 16` and was refused.
+
+The slice-1 reasoning for counting bytes (§9, now corrected) was that counting
+code points of an *escaped* string needs somewhere to decode it. It does not:
+`std.json` has already checked the source is well-formed UTF-8 with no lone
+surrogate, so a code point can be counted straight off the text between the
+quotes -- a byte that is not a continuation byte starts one, a short escape
+(`\n`) is one, `\uXXXX` is one, and a surrogate pair (`\ud83d\ude00`, twelve
+characters) is one. `code_points` does that, allocates nothing, and the
+validator stays heapless.
+
+The differential test had a rule that **kept length-bounded strings ASCII**, so
+that bytes and code points agreed. That rule is how the divergence stayed
+invisible; it is gone, and the generator's alphabet now has one-, two- and
+three-byte characters and astral ones (an escaped pair half the time). Three
+deliberate breakages of the counter (a pair counted twice, bytes counted instead
+of code points, an escape not counted) each fail the unit and differential tests.
+
+**The pattern, twice now (§11, §12):** a decision recorded as "disclosed" is not
+a decision a client can see, and a test restricted to the inputs where two
+semantics agree cannot find the day they stop agreeing.

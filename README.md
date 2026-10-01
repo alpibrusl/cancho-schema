@@ -51,7 +51,7 @@ let doc = schema.json_schema(heap, sc, user);
 ## Tests
 
 ```
-lex-sys test tests/schema_test.ls src/schema.ls --std          # 17 unit tests
+lex-sys test tests/schema_test.ls src/schema.ls --std          # 18 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 

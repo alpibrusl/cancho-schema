@@ -11,14 +11,13 @@ error's (JSON pointer, code). The reference is the `jsonschema` package
 counted.
 
 Where the two are specified differently on purpose (`docs/design.md` §3) the
-reference is bent to the lex-sys rule, not the other way round, and the
-generator stays out of the corners that are only *documented* differences:
+reference is bent to the lex-sys rule, and the generator stays out of the
+corners that are only *documented* differences. Bending the reference is how a
+wrong decision hides (`docs/design.md` §11, §12), so each bend is listed:
 
   * an integer is a JSON integer as JSON Schema has it (`1.0` is one), and one
     outside int64 is an error of its own, `range` (the reference's `integer` type
     is redefined to add the int64 bound);
-  * string length is in bytes of the decoded text, so strings that carry a
-    length bound are ASCII, where bytes and code points agree;
   * the first of a duplicate key wins; documents here have no duplicates.
 
 Exits 0 if every case agrees, 1 and prints the first disagreements otherwise.
@@ -93,14 +92,11 @@ def json_schema(s):
         if s["max"] is not None:
             out["maximum"] = s["max"]
     elif k == "str":
-        # A zero minimum says nothing; `x-length-unit` discloses that this
-        # validator counts bytes (`docs/design.md` §9).
+        # A zero minimum says nothing.
         if s["min"]:
             out["minLength"] = s["min"]
         if s["max"] is not None:
             out["maxLength"] = s["max"]
-        if s["min"] or s["max"] is not None:
-            out["x-length-unit"] = "bytes"
     elif k == "choice":
         # A nullable choice accepts `null` (`docs/design.md` §3); JSON Schema's
         # `enum` applies to every type, so null has to be one of the members.
@@ -122,9 +118,14 @@ def json_schema(s):
 
 
 # ------------------------------------------------------------------- documents
+# ASCII, two-byte, three-byte and astral (a surrogate pair once escaped): length
+# is in code points, so every width must count as one.
+ALPHABET = "abcxyz09 _-" + "éñü" + "日本語" + "😀🎉"
+
+
 def ascii_str(r, lo, hi):
     n = r.randint(lo, hi)
-    return "".join(r.choice("abcxyz09 _-") for _ in range(n))
+    return "".join(r.choice(ALPHABET) for _ in range(n))
 
 
 def valid_value(r, s):
@@ -165,10 +166,7 @@ def corrupt(r, s, v):
     """Make `v` (valid for `s`) wrong in one or two places, or leave it alone."""
     k = s["kind"]
     if r.random() < 0.25:
-        junk = [None, True, 7, -3, 2.5, "zz", [], {}, [1], {"zz": 1}, 1.0, 10**30, "é"]
-        if k == "str":
-            junk.remove("é")  # length is in bytes: keep bounded strings ASCII
-        return r.choice(junk)
+        return r.choice([None, True, 7, -3, 2.5, "zz", [], {}, [1], {"zz": 1}, 1.0, 10**30, "é", "😀"])
     if k == "array" and isinstance(v, list):
         out = [corrupt(r, s["item"], x) if r.random() < 0.5 else x for x in v]
         if r.random() < 0.2:

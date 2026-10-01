@@ -347,7 +347,7 @@ fn schema_text[&h, &s](heap: &!h Heap, sc: &s schema.Schema, root: int, want: &s
 fn test_json_schema_for_an_object[&h](heap: &!h Heap) -> [heap] int {
     let (s, obj) = user(heap);
     borrow s as &sr in {
-        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8,\"x-length-unit\":\"bytes\"},\"age\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":150},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":2}},\"required\":[\"name\"],\"additionalProperties\":false}");
+        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8},\"age\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":150},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":2}},\"required\":[\"name\"],\"additionalProperties\":false}");
     }
     schema.drop(heap, s);
     return 0;
@@ -420,5 +420,32 @@ fn test_a_whole_float_is_checked_against_the_bounds_and_read_as_an_integer[&h](h
         test.assert_eq(schema.to_int(body, t, json.at(t, 0, 4)), 0);
     }
     unbox_slice(heap, tape);
+    return 0;
+}
+
+// Length is counted in code points, as JSON Schema counts it: not bytes, and not
+// UTF-16 units.
+fn test_string_length_counts_code_points[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, two) = schema.new_string(heap, s, 2, 2);
+    s = s1;
+    borrow s as &sr in {
+        says(heap, sr, two, "\"ab\"", 2, "ok");
+        // Two bytes, one code point.
+        says(heap, sr, two, "\"\\u00e9\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"min_length\",\"detail\":\"is too short\"}]}");
+        says(heap, sr, two, "\"\\u00e9\\u00e9\"", 2, "ok");
+        // The same, written as raw UTF-8: three bytes each, one code point each.
+        says(heap, sr, two, "\"日本\"", 2, "ok");
+        says(heap, sr, two, "\"日本語\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"max_length\",\"detail\":\"is too long\"}]}");
+        // An astral character is one code point whether it is written as UTF-8
+        // (four bytes) or as an escaped surrogate pair (twelve characters).
+        says(heap, sr, two, "\"a😀\"", 2, "ok");
+        says(heap, sr, two, "\"a\\ud83d\\ude00\"", 2, "ok");
+        says(heap, sr, two, "\"\\ud83d\\ude00\\ud83d\\ude00\"", 2, "ok");
+        // A short escape is one.
+        says(heap, sr, two, "\"\\n\\t\"", 2, "ok");
+        says(heap, sr, two, "\"\\n\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"min_length\",\"detail\":\"is too short\"}]}");
+    }
+    schema.drop(heap, s);
     return 0;
 }
