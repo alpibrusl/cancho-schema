@@ -1,7 +1,9 @@
 # lexsys-schema: a schema as data
 
-> **Status: design.** Nothing in this document is built. Where a claim rests on
-> something measured it says what and where; where it does not, it says so.
+> **Status: slice 1 built** (builder, validator, pointers, `problem+json`);
+> §5's JSON Schema generation is not. §9 records what building it found, and
+> corrects the sections it contradicted. Where a claim rests on something
+> measured it says what and where; where it does not, it says so.
 
 ## 1. What it is for
 
@@ -145,7 +147,51 @@ published against (`package-system.md` §4.8). This repository will record the
    `let (s, _) = ...`. Whether a table-driven builder (one call taking a
    declarative `[int]` description) is better is a question for the first
    slice, decided by writing both for the `/add` and `/users` examples.
-2. **Code points or bytes** for string length. Code points are what a client
-   means; they cost a UTF-8 walk per checked string. The cost is to be measured,
-   not assumed.
+2. **Code points or bytes** for string length. *Answered for v1 in §9: bytes.*
 3. **Recursion.** Deferred, but the node layout should not make it impossible.
+
+## 9. What building slice 1 found
+
+**Answered open question 2: string length is in bytes of the decoded text.**
+Counting code points of an escaped string needs somewhere to decode it into, and
+`validate` is deliberately heapless (`lex-sys authority` on a program that
+validates reports `heap` from the caller's own allocations and nothing else). A
+plain string could be counted with `utf8.count` for free; one with escapes
+cannot, and two rules for one field would be worse than one. For ASCII the two
+agree. The differential test keeps length-bounded strings ASCII for that reason,
+and the divergence from JSON Schema's `maxLength` (code points) is real and
+documented here, not hidden.
+
+**§3 said number bounds were in v1; they are not.** `bits_of` reads a float's
+bits but the language has no inverse, so a `Vec[int]` arena cannot hold a float
+bound and read it back. `new_number` takes no bounds. This waits on either the
+inverse builtin or a second arena of floats.
+
+**The pointer for a missing required field was not escaped -- and the hand-written
+test blessed it.** `required` pointers appended the field's name raw, so a field
+named `c~d` produced `/c~d` where RFC 6901 says `/c~0d`. The unit test had the
+same wrong expectation, written from the implementation instead of the RFC. The
+differential test, whose reference is an independent library, caught it on its
+second seed; both are fixed, and the unit test now says `/c~0d`.
+
+**Decided where the reference and the design differed, so it is not rediscovered:**
+
+* **`nullable` wins over `choice`.** A nullable string with a set of allowed
+  values accepts `null` (FastAPI's `Optional[Literal[...]]` does). JSON Schema's
+  `enum` applies to every type, so the *generator in slice 2 must add `null` to
+  the `enum`*; the differential test's reference already does.
+* **A value of the wrong type is one error.** JSON Schema reports `type` and
+  `enum` both for `true` against an enum of strings; `schema` reports `type` and
+  stops. The reference drops the `enum` error at a path that already has a `type`
+  one.
+* **An integer outside `int` is `range`, not `type`**, and its bounds are not
+  consulted. `1.0` is `type`.
+* **Fields under an array leave their slots unset** (§3's slot table): an object
+  in an array has many values for one field. Tested.
+
+**Measured.** 13 unit tests; the differential test on 18 seeds of 250 cases each
+agrees; five deliberate off-by-ones (`max`, `min`, `~` escaping, `max_length`,
+`min_items`) each fail it on every one of four seeds, and the unknown-key check
+disabled fails 26 of 250. A first version of the generator let `max` and `~`
+survive (it rarely produced a value exactly at a bound, or an error under a key
+with a `~`); biasing it to the ends of ranges is what made it catch them.
