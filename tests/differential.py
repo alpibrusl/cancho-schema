@@ -92,17 +92,21 @@ def json_schema(s):
         if s["max"] is not None:
             out["maximum"] = s["max"]
     elif k == "str":
-        if s["min"] is not None:
+        # A zero minimum says nothing; `x-length-unit` discloses that this
+        # validator counts bytes (`docs/design.md` §9).
+        if s["min"]:
             out["minLength"] = s["min"]
         if s["max"] is not None:
             out["maxLength"] = s["max"]
+        if s["min"] or s["max"] is not None:
+            out["x-length-unit"] = "bytes"
     elif k == "choice":
         # A nullable choice accepts `null` (`docs/design.md` §3); JSON Schema's
         # `enum` applies to every type, so null has to be one of the members.
         out["enum"] = s["values"] + ([None] if s["nullable"] else [])
     elif k == "array":
         out["items"] = json_schema(s["item"])
-        if s["min"] is not None:
+        if s["min"]:
             out["minItems"] = s["min"]
         if s["max"] is not None:
             out["maxItems"] = s["max"]
@@ -350,6 +354,13 @@ fn report[&h, &i, &s, &b](heap: &!h Heap, io: &!i Io, sc: &s schema.Schema, root
                 let n = schema.validate(sc, root, body, t, contents(sw), e);
                 line = buffer.push_nat(heap, line, n);
                 line = buffer.push(heap, line, byte_of(10));
+                line = buffer.append(heap, line, "S ");
+                let doc = schema.json_schema(heap, sc, root);
+                borrow doc as &db in {
+                    line = buffer.append(heap, line, buffer.bytes(db));
+                }
+                buffer.drop(heap, doc);
+                line = buffer.push(heap, line, byte_of(10));
                 var k = 0;
                 while k < schema.errors_stored(e) {
                     line = buffer.append(heap, line, "E ");
@@ -415,12 +426,15 @@ def main():
         return 2
 
     got = {}
+    generated = {}
     cur = None
     for line in run.stdout.decode("utf-8").split("\n"):
         if line.startswith("C "):
             _, idx, n = line.split(" ")
             cur = int(idx)
             got[cur] = [int(n), set()]
+        elif line.startswith("S "):
+            generated[cur] = line[2:]
         elif line.startswith("E "):
             _, code, pointer = line.split(" ", 2)
             got[cur][1].add((pointer, code))
@@ -430,6 +444,17 @@ def main():
     for index, (s, text, (count, errs)) in enumerate(cases):
         interesting["invalid" if count else "valid"] += 1
         lex_count, lex_errs = got.get(index, [None, None])
+        # The schema the library *generates* must be the one the generator meant,
+        # and must give the reference the same verdict the library's own
+        # validator gave: one declaration, two uses (`docs/design.md` §1).
+        built = json_schema(s)
+        made = json.loads(generated[index]) if index in generated else None
+        from_made = ref.errors(made, json.loads(text)) if made is not None else None
+        if made != built or from_made != (count, errs):
+            bad += 1
+            if bad <= 5:
+                print("GENERATED SCHEMA DISAGREES case %d\n  built:     %s\n  generated: %s\n  doc: %s"
+                      % (index, json.dumps(built), generated.get(index), text))
         if lex_count != count or lex_errs != errs:
             bad += 1
             if bad <= 5:

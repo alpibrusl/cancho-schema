@@ -322,3 +322,63 @@ fn test_a_body_with_thousands_of_errors_is_counted_not_stored[&h](heap: &!h Heap
     schema.drop(heap, s);
     return 0;
 }
+
+fn schema_text[&h, &s](heap: &!h Heap, sc: &s schema.Schema, root: int, want: &static [byte]) -> [heap] int {
+    let got = schema.json_schema(heap, sc, root);
+    borrow got as &g in {
+        test.assert(bytes.equal(buffer.bytes(g), want));
+    }
+    buffer.drop(heap, got);
+    return 0;
+}
+
+fn test_json_schema_for_an_object[&h](heap: &!h Heap) -> [heap] int {
+    let (s, obj) = user(heap);
+    borrow s as &sr in {
+        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8,\"x-length-unit\":\"bytes\"},\"age\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":150},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":2}},\"required\":[\"name\"],\"additionalProperties\":false}");
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_json_schema_for_the_small_kinds[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, any) = schema.new_any(heap, s);
+    let (s2, flag) = schema.new_bool(heap, s1);
+    let (s3, num) = schema.new_number(heap, s2);
+    let (s4, n) = schema.new_int(heap, s3, 0, schema.int_max());
+    s = schema.make_nullable(s4, n);
+    let (s5, colour) = schema.new_string(heap, s, 0, schema.int_max());
+    s = schema.add_choice(heap, s5, colour, "red");
+    s = schema.add_choice(heap, s, colour, "green");
+    s = schema.make_nullable(s, colour);
+    let (s6, plain) = schema.new_string(heap, s, 0, schema.int_max());
+    let (s7, lenient) = schema.new_object(heap, s6, false);
+    s = s7;
+    borrow s as &sr in {
+        schema_text(heap, sr, any, "{}");
+        schema_text(heap, sr, flag, "{\"type\":\"boolean\"}");
+        schema_text(heap, sr, num, "{\"type\":\"number\"}");
+        schema_text(heap, sr, n, "{\"type\":[\"integer\",\"null\"],\"minimum\":0}");
+        // `enum` constrains every type, so a nullable choice lists `null`.
+        schema_text(heap, sr, colour, "{\"type\":[\"string\",\"null\"],\"enum\":[\"red\",\"green\",null]}");
+        schema_text(heap, sr, plain, "{\"type\":\"string\"}");
+        schema_text(heap, sr, lenient, "{\"type\":\"object\",\"properties\":{}}");
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+// Names and members are escaped, not spliced in.
+fn test_json_schema_escapes_what_it_was_given[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, str) = schema.new_string(heap, s, 0, schema.int_max());
+    s = schema.add_choice(heap, s1, str, "a\"b\\c");
+    let (s2, obj) = schema.new_object(heap, s, true);
+    s = schema.add_field(heap, s2, obj, "k\"ey", str, true);
+    borrow s as &sr in {
+        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"k\\\"ey\":{\"type\":\"string\",\"enum\":[\"a\\\"b\\\\c\"]}},\"required\":[\"k\\\"ey\"],\"additionalProperties\":false}");
+    }
+    schema.drop(heap, s);
+    return 0;
+}

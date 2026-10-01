@@ -1,7 +1,7 @@
 # lexsys-schema: a schema as data
 
-> **Status: slice 1 built** (builder, validator, pointers, `problem+json`);
-> §5's JSON Schema generation is not. §9 records what building it found, and
+> **Status: slices 1 and 2 built** (builder, validator, pointers, `problem+json`,
+> JSON Schema generation); assembling the OpenAPI document is `lexsys-web`'s. §9 records what building it found, and
 > corrects the sections it contradicted. Where a claim rests on something
 > measured it says what and where; where it does not, it says so.
 
@@ -195,3 +195,35 @@ agrees; five deliberate off-by-ones (`max`, `min`, `~` escaping, `max_length`,
 disabled fails 26 of 250. A first version of the generator let `max` and `~`
 survive (it rarely produced a value exactly at a bound, or an error under a key
 with a `~`); biasing it to the ends of ranges is what made it catch them.
+
+## 10. What building slice 2 found
+
+`json_schema(heap, schema, node)` writes JSON Schema 2020-12, compact and in the
+order things were added (properties, `required`, `enum` members), so the same
+schema is the same bytes on every run.
+
+**The check §6 promised, and what it turned up.** The differential test now has
+the library *generate* each schema, then (a) requires it to equal the schema the
+test generator meant, and (b) validates every document with the reference
+library against *the generated schema* and requires the same errors the
+library's own validator reported. Six deliberate breakages of the generator
+(drop `null` from a nullable `enum`, drop `additionalProperties`, invert
+`maximum`, invert `required`, off-by-one `minLength`, and the others in the
+README's list) each fail it; and 24 seeds of 250 cases agree.
+
+**One disclosed difference that cannot be removed.** `minLength`/`maxLength` in
+JSON Schema count code points; this validator counts bytes (§9). A schema that
+only said `maxLength: 8` would promise clients something the server does not do
+for non-ASCII text, so a string with a length bound also carries
+`"x-length-unit": "bytes"`. JSON Schema validators ignore unknown keywords, so it
+costs nothing, and the divergence is stated in the document the client reads
+rather than only here. Closing it needs code points (§8.2), which needs a heap.
+
+**A nullable choice lists `null` in its `enum`** (§9's note to this slice, done):
+`{"type":["string","null"],"enum":["red","green",null]}`.
+
+**Not done.** `$ref`/`$defs`: a schema node used twice is written twice. That is
+correct but not compact, and it is the first thing a large API will want;
+recursion (§8.3) needs it and is still deferred. The OpenAPI document itself --
+paths, parameters, responses -- is assembled by `lexsys-web` from its route
+table and these fragments.
