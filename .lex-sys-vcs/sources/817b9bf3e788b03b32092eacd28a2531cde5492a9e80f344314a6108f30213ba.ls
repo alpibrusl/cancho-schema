@@ -27,8 +27,8 @@
 //     has room for; the rest are counted and not stored, so a hostile body
 //     cannot make the list large.
 //
-// Decided, in `docs/design.md` §3: no coercion (`"3"` is not an integer, and
-// neither is `1.0`); the first of a duplicate key wins, as it does in
+// Decided, in `docs/design.md` §3 and §11: no coercion (`"3"` is not an integer;
+// `1.0` is, as in JSON Schema); the first of a duplicate key wins, as it does in
 // `json.get`, so the validator and the reader agree on which value a field has;
 // a string's length is counted in **bytes of the decoded text**, because
 // counting code points of an escaped string needs somewhere to decode it and a
@@ -521,6 +521,48 @@ fn check_unknown[&s, &b, &t, &e](s: &s Schema, object_node: int, body: &b [byte]
     return 0;
 }
 
+// Whether the number at `at` is an integer, JSON Schema's way: `150`, and also
+// `150.0` and `1.5e2`, which is what a client that serializes a float sends for
+// a whole number. 0: it is not one (a string, a boolean, `1.5`); 1: it is, and it
+// fits an `int`; 2: it is, and it does not.
+//
+// `docs/design.md` §11: this used to be "`1.0` is not an integer", and a
+// Schemathesis run against a real service showed that the generated schema said
+// `"type":"integer"` -- which accepts `150.0` -- while the validator refused it.
+fn integral[&b, &t](body: &b [byte], tape: &t [int], at: int) -> [] int {
+    if json.is_int(tape, at) {
+        if json.fits_int(body, tape, at) {
+            return 1;
+        }
+        return 2;
+    }
+    if json.kind(tape, at) != json.kind_float() {
+        return 0;
+    }
+    let x = json.to_float(body, tape, at);
+    // 2^63: every float at or past it is a whole number that no `int` holds.
+    if x >= 9223372036854775808.0 || x < 0.0 - 9223372036854775808.0 {
+        return 2;
+    }
+    if float_of(truncate(x)) == x {
+        return 1;
+    }
+    return 0;
+}
+
+// The value of an integer node, `150` and `150.0` alike. For use on a slot after
+// `validate` said 0, where the node is known to be an integer that fits; 0 for
+// anything else.
+pub fn to_int[&b, &t](body: &b [byte], tape: &t [int], at: int) -> [] int {
+    if json.is_int(tape, at) {
+        return json.to_int(body, tape, at);
+    }
+    if integral(body, tape, at) == 1 {
+        return truncate(json.to_float(body, tape, at));
+    }
+    return 0;
+}
+
 // Check the value at tape node `at` against schema node `node`. `track` says
 // whether fields may be written to `slots`: false inside an array.
 fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t [int], at: int, slots: &!u [int], errs: &!e [int], track: bool) -> [] int {
@@ -547,12 +589,13 @@ fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t 
         return 0;
     }
     if kind == kind_int() {
-        if !json.is_int(tape, at) {
+        let shape = integral(body, tape, at);
+        if shape == 0 {
             fail(errs, err_type(), node, at, 0 - 1);
-        } else if !json.fits_int(body, tape, at) {
+        } else if shape == 2 {
             fail(errs, err_range(), node, at, 0 - 1);
         } else {
-            let value = json.to_int(body, tape, at);
+            let value = to_int(body, tape, at);
             if value < node_at(s, node, 2) {
                 fail(errs, err_minimum(), node, at, 0 - 1);
             }

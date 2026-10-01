@@ -143,8 +143,20 @@ fn test_integers_are_not_coerced_and_do_not_wrap[&h](heap: &!h Heap) -> [heap] i
         says(heap, sr, n, "9223372036854775807", 2, "ok");
         // Not an integer: a string, a float -- `1.0` included -- a boolean.
         says(heap, sr, n, "\"7\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
-        says(heap, sr, n, "1.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
         says(heap, sr, n, "true", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        // Whole numbers written as floats are integers, as in JSON Schema: a client
+        // that serializes a float sends `150.0`.
+        says(heap, sr, n, "1.0", 2, "ok");
+        says(heap, sr, n, "-0.0", 2, "ok");
+        says(heap, sr, n, "1.5e2", 2, "ok");
+        says(heap, sr, n, "1E3", 2, "ok");
+        says(heap, sr, n, "9.007199254740993e15", 2, "ok");
+        // ... and a fraction is not.
+        says(heap, sr, n, "1.5", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        says(heap, sr, n, "1e-1", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        // Whole, and beyond an `int`: `range`, whichever way it is written.
+        says(heap, sr, n, "1e30", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
+        says(heap, sr, n, "-1e30", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
         // Too big for an int: its own error, not a wrap.
         says(heap, sr, n, "9223372036854775808", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
     }
@@ -380,5 +392,33 @@ fn test_json_schema_escapes_what_it_was_given[&h](heap: &!h Heap) -> [heap] int 
         schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"k\\\"ey\":{\"type\":\"string\",\"enum\":[\"a\\\"b\\\\c\"]}},\"required\":[\"k\\\"ey\"],\"additionalProperties\":false}");
     }
     schema.drop(heap, s);
+    return 0;
+}
+
+// A float-spelled integer meets the bounds like any other, and `to_int` reads it.
+fn test_a_whole_float_is_checked_against_the_bounds_and_read_as_an_integer[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, age) = schema.new_int(heap, s, 0, 150);
+    s = s1;
+    borrow s as &sr in {
+        says(heap, sr, age, "150.0", 2, "ok");
+        says(heap, sr, age, "0.0", 2, "ok");
+        says(heap, sr, age, "151.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}]}");
+        says(heap, sr, age, "-1.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}]}");
+    }
+    schema.drop(heap, s);
+    let body = "[150.0, 36, 1e2, 7.5, \"x\"]";
+    let tape = box_slice(heap, json.tape_len(body), 0);
+    borrow mut tape as &!tw in {
+        let t = contents(tw);
+        json.parse(body, t);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 0)), 150);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 1)), 36);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 2)), 100);
+        // Not an integer: 0, which `validate` would have refused first.
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 3)), 0);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 4)), 0);
+    }
+    unbox_slice(heap, tape);
     return 0;
 }

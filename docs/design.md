@@ -64,7 +64,7 @@ that does not exist):
 |---|---|
 | types | object, array, string, integer, number, boolean, null (as `nullable`), any |
 | object | per-field `required`; unknown fields `reject` or `ignore` (default `reject`) |
-| integer | `minimum`, `maximum`; a value outside `int`'s range is an error, not a wrap (`json.fits_int`) |
+| integer | `minimum`, `maximum`; a whole number written as a float (`150.0`, `1.5e2`) is an integer, as in JSON Schema (§11); a value outside `int`'s range is an error, not a wrap (`json.fits_int`) |
 | number | `minimum`, `maximum` |
 | string | `min_length`, `max_length` in **code points** (`std.utf8`), `enum` of strings |
 | array | `min_items`, `max_items`, one item schema |
@@ -72,7 +72,8 @@ that does not exist):
 **Decided, so it is not rediscovered:**
 
 * **No coercion.** `"3"` is not an integer. A framework that silently converts
-  is deciding what the client meant.
+  is deciding what the client meant. (`150.0` *is* an integer -- see §11, which
+  corrects this section: it said it was not.)
 * **Duplicate keys: the first wins**, because that is what `json.get` does
   (`std/json.ls`, the comment on `get`). The validator and the reader must agree
   on which `age` an object has; if they did not, a body could pass validation on
@@ -227,3 +228,42 @@ correct but not compact, and it is the first thing a large API will want;
 recursion (§8.3) needs it and is still deferred. The OpenAPI document itself --
 paths, parameters, responses -- is assembled by `lexsys-web` from its route
 table and these fragments.
+
+## 11. What running a real service against it found
+
+`lexsys-web` has `examples/users`: a service that validates with `schema`, answers
+with `problem+json`, and serves an OpenAPI document that embeds `json_schema` of
+the same nodes. Its end-to-end test generates requests *from that document* with
+Schemathesis. The first run found one defect in this repository that nothing here
+had caught.
+
+**`150.0` is an integer, and the validator said it was not.** §3 and slice 1
+decided "`1.0` is not an integer" -- no coercion. But `json_schema` writes
+`"type":"integer"`, and in JSON Schema that accepts `150.0`: so the document
+promised clients something the server refused, and Schemathesis, whose generator
+follows the standard, sent `"age": 150.0` and was refused. Python's `json.dumps(150.0)` is
+`150.0`, so a Python client does this by accident every day.
+
+Two things made it possible, and both are worth recording:
+
+* The differential test did not catch it **because it had been bent to agree**:
+  the reference's `integer` type was redefined to reject floats, to match the
+  decision. A reference that has been adjusted to a decision cannot disagree with
+  it. The decision was wrong, and only a tool with its own opinion of what the
+  *generated document* means -- Schemathesis, reading the schema as the standard
+  does -- could say so.
+* The unit test pinned the decision, so it passed.
+
+**The fix.** `integral` accepts a number that is a whole value however it is
+spelled (`150`, `150.0`, `1.5e2`); a fraction is `type`; a whole value beyond
+`int` is `range`; bounds are checked on the value. Reading it back is a new
+public function, `schema.to_int(body, tape, node)`, because the obvious
+`json.to_int` answers 0 for a float node -- the example called it and would have
+stored `"age": 0` for a request that said `150.0`, silently. The differential
+test's reference is no longer bent on this point (it only adds the int64 bound),
+and it generates float-spelled integers; disabling float acceptance now fails it
+on every seed.
+
+**Also found, in `lexsys-web`'s example rather than here** (recorded there): an
+unknown query parameter had to be refused for the same reason unknown body fields
+are, and the document had to state the integer maximum the server enforces.
