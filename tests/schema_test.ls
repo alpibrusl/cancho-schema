@@ -449,3 +449,58 @@ fn test_string_length_counts_code_points[&h](heap: &!h Heap) -> [heap] int {
     schema.drop(heap, s);
     return 0;
 }
+
+// {"name": string 1..20 that refuses U+0000, "note"?: string that does not}
+fn nul_schema[&h](heap: &!h Heap) -> [heap] (schema.Schema, int) {
+    var s = schema.empty(heap);
+    let (s1, name) = schema.new_string(heap, s, 1, 20);
+    let (s2, note) = schema.new_string(heap, s1, 0, schema.int_max());
+    let (s3, obj) = schema.new_object(heap, s2, true);
+    s = schema.add_field(heap, s3, obj, "name", name, true);
+    s = schema.add_field(heap, s, obj, "note", note, false);
+    s = schema.forbid_nul(s, name);
+    return (s, obj);
+}
+
+fn nul_problem() -> [] &static [byte] {
+    return "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"/name\",\"code\":\"nul\",\"detail\":\"must not contain U+0000\"}]}";
+}
+
+// The only way JSON spells U+0000 is the escape `\u0000`; `\\u0000` is a backslash and four
+// characters, and `\u00000` a NUL and a zero.
+fn test_a_string_that_forbids_nul_refuses_the_escape_and_only_the_escape[&h](heap: &!h Heap) -> [heap] int {
+    let (s, obj) = nul_schema(heap);
+    borrow s as &sr in {
+        says(heap, sr, obj, "{\"name\":\"ada\"}", 4, "ok");
+        says(heap, sr, obj, "{\"name\":\"a\\u0000b\"}", 4, nul_problem());
+        says(heap, sr, obj, "{\"name\":\"\\u0000\"}", 4, nul_problem());
+        says(heap, sr, obj, "{\"name\":\"ab\\u0000\"}", 4, nul_problem());
+        says(heap, sr, obj, "{\"name\":\"\\u00000\"}", 4, nul_problem());
+        says(heap, sr, obj, "{\"name\":\"\\n\\u0000\\n\"}", 4, nul_problem());
+        // an escaped backslash followed by the characters u0000 is not a NUL
+        says(heap, sr, obj, "{\"name\":\"\\\\u0000\"}", 4, "ok");
+        says(heap, sr, obj, "{\"name\":\"a\\\\\\u0000\"}", 4, nul_problem());
+        // other escapes, a surrogate pair, and a character that merely looks like one
+        says(heap, sr, obj, "{\"name\":\"\\u00e9\\ud83d\\ude00\\u0001\\n\"}", 4, "ok");
+        says(heap, sr, obj, "{\"name\":\"é\"}", 4, "ok");
+        // a node that did not ask for it takes NUL
+        says(heap, sr, obj, "{\"name\":\"x\",\"note\":\"a\\u0000b\"}", 4, "ok");
+        // length is still checked, and both are reported
+        says(heap, sr, obj, "{\"name\":\"\\u0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}", 4, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":2,\"errors\":[{\"pointer\":\"/name\",\"code\":\"max_length\",\"detail\":\"is too long\"},{\"pointer\":\"/name\",\"code\":\"nul\",\"detail\":\"must not contain U+0000\"}]}");
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_json_schema_says_so_in_a_pattern[&h](heap: &!h Heap) -> [heap] int {
+    let (s, obj) = nul_schema(heap);
+    borrow s as &sr in {
+        let d = schema.json_schema(heap, sr, obj);
+        borrow d as &dr in {
+            test.assert(bytes.equal(buffer.bytes(dr), "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":20,\"pattern\":\"^[^\\\\u0000]*$\"},\"note\":{\"type\":\"string\"}},\"required\":[\"name\"],\"additionalProperties\":false}"));
+        }
+        buffer.drop(heap, d);
+    }
+    schema.drop(heap, s);
+    return 0;
+}

@@ -149,6 +149,7 @@ exercised in [`tests/schema_test.ls`](tests/schema_test.ls).
 | `add_field(heap, s, object, name, node, required)` | a field of an object (returns the schema) |
 | `add_choice(heap, s, node, value)` | restrict a string node to a set of values (`enum`; returns the schema) |
 | `make_nullable(s, node)` | the node may also be `null` (returns the schema) |
+| `forbid_nul(s, node)` | the string node refuses U+0000 (`\u0000`), and its JSON Schema says `"pattern":"^[^\\u0000]*$"` (returns the schema); for a store whose text cannot hold it |
 
 | Validate and report | |
 |---|---|
@@ -164,7 +165,7 @@ exercised in [`tests/schema_test.ls`](tests/schema_test.ls).
 
 Error codes: `type`, `required`, `unknown`, `minimum`, `maximum`, `min_length`,
 `max_length`, `choice`, `min_items`, `max_items`, `range` (an integer that does not fit
-in 64 bits -- an error, not a wrap).
+in 64 bits -- an error, not a wrap), `nul` (U+0000 in a string that forbids it).
 
 ## What it decides (so you do not have to guess)
 
@@ -192,7 +193,7 @@ comment, but every source hash does.
 ## Tests
 
 ```
-lex-sys test tests/schema_test.ls src/schema.ls --std          # 18 unit tests
+lex-sys test tests/schema_test.ls src/schema.ls --std          # 20 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 

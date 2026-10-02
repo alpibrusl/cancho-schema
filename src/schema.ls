@@ -187,6 +187,19 @@ pub fn new_string[&h](heap: &!h Heap, s: Schema, min: int, max: int) -> [heap] (
     return push_node(heap, s, kind_string(), min, max, 0 - 1, 0 - 1, 0);
 }
 
+// The string node refuses U+0000 (in any spelling: `\u0000` is the only one JSON allows). For a
+// service whose store cannot hold it -- PostgreSQL `text` cannot -- so that the API's contract
+// says so, instead of a request the document accepts failing later: the JSON Schema generated for
+// the node carries `"pattern":"^[^\u0000]*$"`. Nothing else changes about the node.
+pub fn forbid_nul(s: Schema, node: int) -> [] Schema {
+    let Schema { nodes, fields, members, text } = s;
+    var v = nodes;
+    borrow mut v as &!w in {
+        vec.set(w, node * node_width() + 6, 1);
+    }
+    return Schema { nodes: v, fields: fields, members: members, text: text };
+}
+
 // An array of `min..=max` elements, each matching `item`.
 pub fn new_array[&h](heap: &!h Heap, s: Schema, item: int, min: int, max: int) -> [heap] (Schema, int) {
     return push_node(heap, s, kind_array(), item, min, max, 0, 0);
@@ -356,6 +369,10 @@ pub fn err_range() -> [] int {
     return 11;
 }
 
+pub fn err_nul() -> [] int {
+    return 12;
+}
+
 // The size of an `errs` slice that can hold `n` errors.
 pub fn errors_len(n: int) -> [] int {
     return 1 + n * error_width();
@@ -414,6 +431,9 @@ pub fn code_name(code: int) -> [] &static [byte] {
     if code == 11 {
         return "range";
     }
+    if code == 12 {
+        return "nul";
+    }
     return "unknown";
 }
 
@@ -451,6 +471,9 @@ pub fn code_message(code: int) -> [] &static [byte] {
     }
     if code == 11 {
         return "is outside the range of an integer";
+    }
+    if code == 12 {
+        return "must not contain U+0000";
     }
     return "is invalid";
 }
@@ -581,6 +604,28 @@ fn code_points[&r](raw: &r [byte]) -> [] int {
     return n;
 }
 
+// Whether the string whose text between the quotes is `raw` holds U+0000: the escape `\u0000`.
+// Walks the escapes as `code_points` does, so `\\u0000` (a backslash, then the characters `u0000`)
+// is not one.
+fn has_nul[&r](raw: &r [byte]) -> [] bool {
+    var i = 0;
+    while i < len(raw) {
+        if int_of(raw[i]) == 92 && i + 1 < len(raw) {
+            if int_of(raw[i + 1]) == 117 {
+                if hex4(raw, i + 2) == 0 {
+                    return true;
+                }
+                i = i + 6;
+            } else {
+                i = i + 2;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return false;
+}
+
 // Whether the number at `at` is an integer, JSON Schema's way: `150`, and also
 // `150.0` and `1.5e2`, which is what a client that serializes a float sends for
 // a whole number. 0: it is not one (a string, a boolean, `1.5`); 1: it is, and it
@@ -678,6 +723,9 @@ fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t 
             }
             if node_at(s, node, 4) >= 0 && !is_member(s, node, body, tape, at) {
                 fail(errs, err_choice(), node, at, 0 - 1);
+            }
+            if node_at(s, node, 6) == 1 && has_nul(json.string_view(body, tape, at)) {
+                fail(errs, err_nul(), node, at, 0 - 1);
             }
         }
         return 0;
@@ -937,6 +985,10 @@ fn write_node[&h, &s](heap: &!h Heap, sc: &s Schema, node: int, w: json.Writer) 
         if hi != int_max() {
             o = json.put_key(heap, o, "maxLength");
             o = json.put_int(heap, o, hi);
+        }
+        if node_at(sc, node, 6) == 1 {
+            o = json.put_key(heap, o, "pattern");
+            o = json.put_string(heap, o, "^[^\\u0000]*$");
         }
         if node_at(sc, node, 4) >= 0 {
             o = json.put_key(heap, o, "enum");
