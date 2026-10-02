@@ -52,3 +52,9 @@ jobs:
           for seed in 1 2 3 4; do
             python3 tests/differential.py --cases 250 --seed "$seed"
           done
+
+      # The README quotes this output; the file it is checked against is the same
+      # one, so a README that drifts from the code is a red build.
+      - name: The example prints what the README says
+        working-directory: schema
+        run: ../lex-sys/target/release/lex-sys run --std examples/validate.ls src/schema.ls | diff - examples/validate.out

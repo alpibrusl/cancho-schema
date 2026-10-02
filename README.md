@@ -1,52 +1,175 @@
 # lexsys-schema
 
-> **Status: slices 1 and 2 built** -- the schema builder, the validator,
-> JSON-pointer error locations, `problem+json`, and JSON Schema generation, in
-> [`src/schema.ls`](src/schema.ls). Not yet built: assembling an OpenAPI document
-> (that is `lexsys-web`'s, from its routes plus these fragments). [`docs/design.md`](docs/design.md)
-> says what will be and marks every claim as measured or not; §9 there is what
-> building the first slice found.
+A schema for [lex-sys](https://github.com/alpibrusl/lex-sys), written as **data**: one
+value, built when the program starts, that drives
 
-A schema for [lex-sys](https://github.com/alpibrusl/lex-sys), written as **data**:
-one value, built when the program starts, that drives
+* **validation** of a JSON body (`std.json` tape in, *every* error out, not the first),
+* **error bodies** (RFC 9457 `application/problem+json`, with JSON Pointer paths),
+* **JSON Schema 2020-12 generation** (what OpenAPI 3.1 embeds),
 
-* **validation** of a JSON body (`std.json` tape in, every error out, not the first),
-* **error bodies** (RFC 9457 `application/problem+json`, with JSON-pointer paths),
-* **OpenAPI 3.1 / JSON Schema generation**,
-
-so that what the API accepts and what its documentation says are the same
-object and cannot drift. It is the half of a FastAPI-shaped stack that
+so that what an API accepts and what its documentation says are the same object and
+cannot drift. It is the half of a FastAPI-shaped stack that
 [`lexsys-web`](https://github.com/alpibrusl/lexsys-web) builds on.
 
 No C: it is ordinary lex-sys over `std.json`, `std.buffer` and `std.vec`, and
-`lex-sys authority` on a program that validates a body reports **`heap` and
-nothing else** -- no console, filesystem, network, command line or foreign code
-(checked, not assumed).
+`lex-sys authority` on a program that validates a body reports **`heap` and nothing
+else** -- no console, filesystem, network, command line or foreign code (checked, not
+assumed).
 
-## Use
+> **Status:** built -- the builder, the validator, JSON-pointer error locations,
+> `problem+json` and JSON Schema generation, all in [`src/schema.ls`](src/schema.ls),
+> tested against an independent validator ([below](#tests)). Not built: `$ref`/`$defs`
+> (a node used twice is written twice), bounds on floats, and assembling an OpenAPI
+> document (that is `lexsys-web`'s, from its routes plus these fragments).
+> [`docs/design.md`](docs/design.md) says what was decided and marks every claim as
+> measured or not; §9-§12 are what building against real services found.
+
+## Try it
+
+You need the `lex-sys` compiler (Rust; the toolchain is pinned by its `rust-toolchain.toml`):
 
 ```
-lex-sys vcs publish --std --store .lex-sys-vcs src/schema.ls   # already done: .lex-sys-vcs/ is checked in
-lex-sys vcs lock  --store <path to this repo>/.lex-sys-vcs -o schema.lock new_object add_field validate ...
-lex-sys vcs fetch --lock schema.lock --store <path>/.lex-sys-vcs -o deps/
-lex-sys build --std app.ls deps/*.ls -o app
+git clone https://github.com/alpibrusl/lex-sys && cd lex-sys
+git checkout 232a59c8451aa7df0b72ab0d0ee053b26a951e86   # the revision CI builds and tests against
+cargo build --release -p lex-sys                        # -> target/release/lex-sys
 ```
 
-`tests/schema_test.ls` shows every call. The shape:
+Then, from this repository, run the example (a store records no hash of the `std` it was
+published against, so the compiler revision above is part of the contract):
+
+```
+lex-sys run --std examples/validate.ls src/schema.ls
+```
+
+[`examples/validate.ls`](examples/validate.ls) builds a `User` schema, checks four request
+bodies against it, and prints the schema as JSON Schema. This is its output (CI checks
+that it still is -- [`examples/validate.out`](examples/validate.out)):
+
+```
+valid        : ok
+two problems : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":2,"errors":[{"pointer":"/name","code":"min_length","detail":"is too short"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"}]}
+nested path  : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/tags/1","code":"type","detail":"has the wrong type"}]}
+unknown key  : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/admin","code":"unknown","detail":"is not a known field"}]}
+not JSON     : not JSON
+
+JSON Schema 2020-12:
+{"type":"object","properties":{"name":{"type":"string","minLength":1,"maxLength":64},"email":{"type":"string","minLength":3,"maxLength":120},"age":{"type":"integer","minimum":0,"maximum":150},"role":{"type":"string","minLength":1,"maxLength":5,"enum":["admin","user","guest"]},"tags":{"type":"array","items":{"type":"string","minLength":1,"maxLength":16},"maxItems":8}},"required":["name"],"additionalProperties":false}
+```
+
+## How it reads
+
+(`&s` below is shorthand for a borrow of the schema, `borrow s as &sr in { ... }` -- the
+example program has the real syntax.)
+
+**1. Declare the shape once**, at start-up. Each constructor takes the schema and returns
+it with a new node, and the node's id; fields are added to an object by id:
 
 ```
 var s = schema.empty(heap);
-let (s1, name) = schema.new_string(heap, s, 1, 64);
+let (s1, name) = schema.new_string(heap, s, 1, 64);        // 1..64 code points
 let (s2, age)  = schema.new_int(heap, s1, 0, 150);
-let (s3, user) = schema.new_object(heap, s2, true);
-s = schema.add_field(heap, s3, user, "name", name, true);
-s = schema.add_field(heap, s, user, "age", age, false);
-// per request: parse with std.json, then
-let n = schema.validate(sc, user, body, tape, slots, errs);   // 0: it has the shape
-let problem = schema.problem(heap, sc, body, tape, errs, 422, "Unprocessable Content");
-// and the same declaration as JSON Schema 2020-12 (what OpenAPI 3.1 uses):
-let doc = schema.json_schema(heap, sc, user);
+let (s3, user) = schema.new_object(heap, s2, true);        // true: refuse unknown keys
+s = schema.add_field(heap, s3, user, "name", name, true);  // required
+s = schema.add_field(heap, s, user, "age", age, false);    // optional
 ```
+
+**2. Validate per request:** parse with `std.json`, then
+
+```
+let tape  = box_slice(heap, json.tape_len(body), 0);
+let slots = box_slice(heap, schema.slot_count(&s) + 1, 0);
+let errs  = box_slice(heap, schema.errors_len(16), 0);     // room for 16 errors
+// ... borrow them mutably, then:
+json.parse(body, t);                                        // < 0: not JSON at all (a 400)
+let n = schema.validate(&s, user, body, t, slots, errs);   // 0: the body has the shape
+```
+
+`slots[k]` is then the tape node of the value of the `k`-th field you added (`-1` if the
+body omitted it), so a handler reads its inputs without a second lookup
+(`schema.to_int(body, t, slots[k])` for an integer).
+
+**3. Answer the errors** -- all of them, with where they are:
+
+```
+let problem = schema.problem(heap, &s, body, t, errs, 422, "Unprocessable Content");
+// {"type":"about:blank","title":"Unprocessable Content","status":422,"count":2,
+//  "errors":[{"pointer":"/name","code":"min_length","detail":"is too short"}, ...]}
+```
+
+**4. Document it** from the same value:
+
+```
+let doc = schema.json_schema(heap, &s, user);               // JSON Schema 2020-12, deterministic
+```
+
+The full program is [`examples/validate.ls`](examples/validate.ls); every call is also
+exercised in [`tests/schema_test.ls`](tests/schema_test.ls).
+
+## The API
+
+| Build (each returns the schema and the new node's id, except where noted) | |
+|---|---|
+| `schema.empty(heap)` / `schema.drop(heap, s)` | a new schema / end it (it owns an allocation: a `res`) |
+| `new_string(heap, s, min, max)` | a string of `min..=max` **code points** (as JSON Schema counts them, not bytes) |
+| `new_int(heap, s, lo, hi)` | an integer; `int_min()` / `int_max()` for no bound |
+| `new_number(heap, s)` | any JSON number (no bounds yet) |
+| `new_bool(heap, s)` / `new_any(heap, s)` | a boolean / any value |
+| `new_array(heap, s, item, min, max)` | `min..=max` elements, each matching node `item` |
+| `new_object(heap, s, strict)` | an object; `strict` refuses a key no field names |
+| `add_field(heap, s, object, name, node, required)` | a field of an object (returns the schema) |
+| `add_choice(heap, s, node, value)` | restrict a string node to a set of values (`enum`; returns the schema) |
+| `make_nullable(s, node)` | the node may also be `null` (returns the schema) |
+
+| Validate and report | |
+|---|---|
+| `validate(&s, root, body, tape, slots, errs)` | number of errors found; fills `slots` (`slot_count(&s)` ints) and `errs` |
+| `slot_count(&s)` / `last_slot(&s)` / `node_count(&s)` | sizes |
+| `errors_len(n)` | the size of an `errs` slice that holds `n` errors |
+| `error_count(errs)` / `errors_stored(errs)` | how many were found / how many fit (the list is bounded; the count is not) |
+| `error_code(errs, i)` / `code_name(code)` / `code_message(code)` | the `i`-th error's code, its short name and its sentence |
+| `pointer(heap, &s, body, tape, errs, i)` | its RFC 6901 JSON Pointer (`/tags/1`, `~0` `~1` escaped) |
+| `problem(heap, &s, body, tape, errs, status, title)` | the whole RFC 9457 body |
+| `json_schema(heap, &s, root)` | the schema node as a JSON Schema 2020-12 document |
+| `to_int(body, tape, at)` | the value of an integer slot (`150` and `150.0` alike), after `validate` said 0 |
+
+Error codes: `type`, `required`, `unknown`, `minimum`, `maximum`, `min_length`,
+`max_length`, `choice`, `min_items`, `max_items`, `range` (an integer that does not fit
+in 64 bits -- an error, not a wrap).
+
+## What it decides (so you do not have to guess)
+
+* **No coercion.** `"36"` is not an integer; `true` is not a string.
+* **Whole floats are integers**, as in JSON Schema: `150.0` and `1.5e2` are; `1.5` is a
+  `type` error; `1e30` is `range`. (A client that serializes a float sends `150.0`;
+  refusing it while the generated schema says `"type":"integer"` was a defect a real
+  service exposed -- `docs/design.md` §11.)
+* **String length is in code points**, counted from the source text (an escaped
+  `😀` is one, as is the 4-byte `😀`).
+* **Every error is reported**, not the first -- up to the room you gave `errs`; the count
+  is always exact.
+* **Strict objects refuse unknown keys**, at the key's own pointer.
+* A repeated key: the first occurrence is the one validated and stored in the slot.
+
+## In another project
+
+A package is published to the checked-in store [`.lex-sys-vcs/`](.lex-sys-vcs/) and
+consumed by *locking* the names you use -- a lock pins each by hash, and `fetch` refuses a
+store that no longer matches. From a project that has this repository checked out beside it:
+
+```
+lex-sys vcs lock  --store ../lexsys-schema/.lex-sys-vcs -o schema.lock \
+    empty drop new_string new_int new_array new_object add_field add_choice \
+    validate problem json_schema slot_count errors_len
+lex-sys vcs fetch --lock schema.lock --store ../lexsys-schema/.lex-sys-vcs -o deps/
+lex-sys build --std app.ls deps/*.ls -o app
+```
+
+That is the path `examples/validate.ls` was built through to check the output above is
+identical to the source-level run. Lock the *names you call*; the closure they need comes
+with them. [`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s `deps/schema.lock` is
+a larger real one. Publishing a change is `rm -rf .lex-sys-vcs && lex-sys vcs publish --std
+--store .lex-sys-vcs src/schema.ls` (a store refuses a changed body, so it is regenerated),
+followed by re-locking every consumer.
 
 ## Tests
 
@@ -55,16 +178,16 @@ lex-sys test tests/schema_test.ls src/schema.ls --std          # 18 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 
-The differential test generates random (schema, document) pairs, builds each
-schema both as JSON Schema and as a lex-sys program, and compares the *set of
-(pointer, code)* the two report. 250 cases on each of 24 seeds agree. The same
-test also checks the generated JSON Schema: it must equal the schema the generator
-meant, and must give the reference the same verdicts the library's own validator
-gave. Both suites are mutation-checked: a deliberate off-by-one in a bound, in the escaping
-of `~`, in the unknown-key check, or in the item counts fails them.
+(`pip install jsonschema`; `LEX_SYS=` names the compiler if it is not on `PATH`.)
 
-Tested against `lex-sys` at `c5ee956` (a store records no hash of the `std` it
-was published against, so the compiler version is stated here).
+The differential test generates random (schema, document) pairs, builds each schema both as
+JSON Schema and as a lex-sys program, and compares the *set of (pointer, code)* the two
+report. 250 cases on each of 24 seeds agree. The same test also checks the generated JSON
+Schema: it must equal the schema the generator meant, and must give the reference the same
+verdicts the library's own validator gave. Both suites are mutation-checked: a deliberate
+off-by-one in a bound, in the escaping of `~`, in the unknown-key check, or in the item
+counts fails them. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the
+pinned compiler and runs the unit tests, four differential seeds and the example.
 
 ## Licence
 
