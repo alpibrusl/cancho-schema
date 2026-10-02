@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  # The compiler these sources are built and tested with. `vcs lock` pins
+  # source hashes but not the bundled `std`, so the compiler version has to be
+  # stated somewhere; here is where. Raising it is a deliberate act.
+  LEX_SYS_REV: 232a59c8451aa7df0b72ab0d0ee053b26a951e86
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: schema
+
+      - uses: actions/checkout@v4
+        with:
+          repository: alpibrusl/lex-sys
+          ref: ${{ env.LEX_SYS_REV }}
+          path: lex-sys
+
+      - name: Cache the compiler
+        id: compiler
+        uses: actions/cache@v4
+        with:
+          path: lex-sys/target/release/lex-sys
+          key: lex-sys-${{ env.LEX_SYS_REV }}
+
+      - name: Build lex-sys
+        if: steps.compiler.outputs.cache-hit != 'true'
+        working-directory: lex-sys
+        run: cargo build --release -p lex-sys
+
+      - name: Reference validator
+        run: pip install jsonschema
+
+      - name: Unit tests
+        working-directory: schema
+        run: ../lex-sys/target/release/lex-sys test tests/schema_test.ls src/schema.ls --std
+
+      - name: Differential tests against jsonschema
+        working-directory: schema
+        env:
+          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+        run: |
+          for seed in 1 2 3 4; do
+            python3 tests/differential.py --cases 250 --seed "$seed"
+          done
