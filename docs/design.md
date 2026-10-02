@@ -64,7 +64,7 @@ that does not exist):
 |---|---|
 | types | object, array, string, integer, number, boolean, null (as `nullable`), any |
 | object | per-field `required`; unknown fields `reject` or `ignore` (default `reject`) |
-| integer | `minimum`, `maximum`; a value outside `int`'s range is an error, not a wrap (`json.fits_int`) |
+| integer | `minimum`, `maximum`; a whole number written as a float (`150.0`, `1.5e2`) is an integer, as in JSON Schema (§11); a value outside `int`'s range is an error, not a wrap (`json.fits_int`) |
 | number | `minimum`, `maximum` |
 | string | `min_length`, `max_length` in **code points** (`std.utf8`), `enum` of strings |
 | array | `min_items`, `max_items`, one item schema |
@@ -72,7 +72,8 @@ that does not exist):
 **Decided, so it is not rediscovered:**
 
 * **No coercion.** `"3"` is not an integer. A framework that silently converts
-  is deciding what the client meant.
+  is deciding what the client meant. (`150.0` *is* an integer -- see §11, which
+  corrects this section: it said it was not.)
 * **Duplicate keys: the first wins**, because that is what `json.get` does
   (`std/json.ls`, the comment on `get`). The validator and the reader must agree
   on which `age` an object has; if they did not, a body could pass validation on
@@ -152,15 +153,14 @@ published against (`package-system.md` §4.8). This repository will record the
 
 ## 9. What building slice 1 found
 
-**Answered open question 2: string length is in bytes of the decoded text.**
-Counting code points of an escaped string needs somewhere to decode it into, and
-`validate` is deliberately heapless (`lex-sys authority` on a program that
-validates reports `heap` from the caller's own allocations and nothing else). A
-plain string could be counted with `utf8.count` for free; one with escapes
-cannot, and two rules for one field would be worse than one. For ASCII the two
-agree. The differential test keeps length-bounded strings ASCII for that reason,
-and the divergence from JSON Schema's `maxLength` (code points) is real and
-documented here, not hidden.
+**Open question 2, string length: first answered "bytes", then corrected (§12).**
+Slice 1 counted the bytes of the decoded text, reasoning that counting code points
+of an escaped string needs somewhere to decode it and the validator has no heap.
+That reasoning was wrong -- the source text can be counted without decoding it --
+and the answer was wrong for clients: JSON Schema's `maxLength` counts code points,
+so a 16-character tag of Japanese was refused as 48 bytes. §12 has the fix; the
+text that stood here said bytes and said the divergence was disclosed. It was
+disclosed in a keyword no client reads.
 
 **§3 said number bounds were in v1; they are not.** `bits_of` reads a float's
 bits but the language has no inverse, so a `Vec[int]` arena cannot hold a float
@@ -211,13 +211,9 @@ library's own validator reported. Six deliberate breakages of the generator
 `maximum`, invert `required`, off-by-one `minLength`, and the others in the
 README's list) each fail it; and 24 seeds of 250 cases agree.
 
-**One disclosed difference that cannot be removed.** `minLength`/`maxLength` in
-JSON Schema count code points; this validator counts bytes (§9). A schema that
-only said `maxLength: 8` would promise clients something the server does not do
-for non-ASCII text, so a string with a length bound also carries
-`"x-length-unit": "bytes"`. JSON Schema validators ignore unknown keywords, so it
-costs nothing, and the divergence is stated in the document the client reads
-rather than only here. Closing it needs code points (§8.2), which needs a heap.
+**(Corrected in §12.)** This section first said one difference could not be
+removed: string length in bytes, disclosed by an `x-length-unit` keyword. It could
+be removed, the keyword is gone, and the generated schema is plain JSON Schema.
 
 **A nullable choice lists `null` in its `enum`** (§9's note to this slice, done):
 `{"type":["string","null"],"enum":["red","green",null]}`.
@@ -227,3 +223,67 @@ correct but not compact, and it is the first thing a large API will want;
 recursion (§8.3) needs it and is still deferred. The OpenAPI document itself --
 paths, parameters, responses -- is assembled by `lexsys-web` from its route
 table and these fragments.
+
+## 11. What running a real service against it found
+
+`lexsys-web` has `examples/users`: a service that validates with `schema`, answers
+with `problem+json`, and serves an OpenAPI document that embeds `json_schema` of
+the same nodes. Its end-to-end test generates requests *from that document* with
+Schemathesis. The first run found one defect in this repository that nothing here
+had caught.
+
+**`150.0` is an integer, and the validator said it was not.** §3 and slice 1
+decided "`1.0` is not an integer" -- no coercion. But `json_schema` writes
+`"type":"integer"`, and in JSON Schema that accepts `150.0`: so the document
+promised clients something the server refused, and Schemathesis, whose generator
+follows the standard, sent `"age": 150.0` and was refused. Python's `json.dumps(150.0)` is
+`150.0`, so a Python client does this by accident every day.
+
+Two things made it possible, and both are worth recording:
+
+* The differential test did not catch it **because it had been bent to agree**:
+  the reference's `integer` type was redefined to reject floats, to match the
+  decision. A reference that has been adjusted to a decision cannot disagree with
+  it. The decision was wrong, and only a tool with its own opinion of what the
+  *generated document* means -- Schemathesis, reading the schema as the standard
+  does -- could say so.
+* The unit test pinned the decision, so it passed.
+
+**The fix.** `integral` accepts a number that is a whole value however it is
+spelled (`150`, `150.0`, `1.5e2`); a fraction is `type`; a whole value beyond
+`int` is `range`; bounds are checked on the value. Reading it back is a new
+public function, `schema.to_int(body, tape, node)`, because the obvious
+`json.to_int` answers 0 for a float node -- the example called it and would have
+stored `"age": 0` for a request that said `150.0`, silently. The differential
+test's reference is no longer bent on this point (it only adds the int64 bound),
+and it generates float-spelled integers; disabling float acceptance now fails it
+on every seed.
+
+**Also found, in `lexsys-web`'s example rather than here** (recorded there): an
+unknown query parameter had to be refused for the same reason unknown body fields
+are, and the document had to state the integer maximum the server enforces.
+
+## 12. A second defect from the same service: string length
+
+The same Schemathesis run, once `150.0` was fixed, sent `"tags": ["日本語…"]`
+(sixteen characters, forty-eight bytes) against a `maxLength: 16` and was refused.
+
+The slice-1 reasoning for counting bytes (§9, now corrected) was that counting
+code points of an *escaped* string needs somewhere to decode it. It does not:
+`std.json` has already checked the source is well-formed UTF-8 with no lone
+surrogate, so a code point can be counted straight off the text between the
+quotes -- a byte that is not a continuation byte starts one, a short escape
+(`\n`) is one, `\uXXXX` is one, and a surrogate pair (`\ud83d\ude00`, twelve
+characters) is one. `code_points` does that, allocates nothing, and the
+validator stays heapless.
+
+The differential test had a rule that **kept length-bounded strings ASCII**, so
+that bytes and code points agreed. That rule is how the divergence stayed
+invisible; it is gone, and the generator's alphabet now has one-, two- and
+three-byte characters and astral ones (an escaped pair half the time). Three
+deliberate breakages of the counter (a pair counted twice, bytes counted instead
+of code points, an escape not counted) each fail the unit and differential tests.
+
+**The pattern, twice now (§11, §12):** a decision recorded as "disclosed" is not
+a decision a client can see, and a test restricted to the inputs where two
+semantics agree cannot find the day they stop agreeing.

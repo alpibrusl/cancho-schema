@@ -11,13 +11,13 @@ error's (JSON pointer, code). The reference is the `jsonschema` package
 counted.
 
 Where the two are specified differently on purpose (`docs/design.md` §3) the
-reference is bent to the lex-sys rule, not the other way round, and the
-generator stays out of the corners that are only *documented* differences:
+reference is bent to the lex-sys rule, and the generator stays out of the
+corners that are only *documented* differences. Bending the reference is how a
+wrong decision hides (`docs/design.md` §11, §12), so each bend is listed:
 
-  * an integer is a JSON integer: `1.0` is not one, and one outside int64 is an
-    error of its own (the reference's `integer` type is redefined to say so);
-  * string length is in bytes of the decoded text, so strings that carry a
-    length bound are ASCII, where bytes and code points agree;
+  * an integer is a JSON integer as JSON Schema has it (`1.0` is one), and one
+    outside int64 is an error of its own, `range` (the reference's `integer` type
+    is redefined to add the int64 bound);
   * the first of a duplicate key wins; documents here have no duplicates.
 
 Exits 0 if every case agrees, 1 and prints the first disagreements otherwise.
@@ -92,14 +92,11 @@ def json_schema(s):
         if s["max"] is not None:
             out["maximum"] = s["max"]
     elif k == "str":
-        # A zero minimum says nothing; `x-length-unit` discloses that this
-        # validator counts bytes (`docs/design.md` §9).
+        # A zero minimum says nothing.
         if s["min"]:
             out["minLength"] = s["min"]
         if s["max"] is not None:
             out["maxLength"] = s["max"]
-        if s["min"] or s["max"] is not None:
-            out["x-length-unit"] = "bytes"
     elif k == "choice":
         # A nullable choice accepts `null` (`docs/design.md` §3); JSON Schema's
         # `enum` applies to every type, so null has to be one of the members.
@@ -121,9 +118,14 @@ def json_schema(s):
 
 
 # ------------------------------------------------------------------- documents
+# ASCII, two-byte, three-byte and astral (a surrogate pair once escaped): length
+# is in code points, so every width must count as one.
+ALPHABET = "abcxyz09 _-" + "éñü" + "日本語" + "😀🎉"
+
+
 def ascii_str(r, lo, hi):
     n = r.randint(lo, hi)
-    return "".join(r.choice("abcxyz09 _-") for _ in range(n))
+    return "".join(r.choice(ALPHABET) for _ in range(n))
 
 
 def valid_value(r, s):
@@ -138,7 +140,9 @@ def valid_value(r, s):
         lo = s["min"] if s["min"] is not None else -20
         hi = s["max"] if s["max"] is not None else lo + 40
         # The ends of the range are where an off-by-one lives.
-        return r.choice([lo, max(lo, hi), r.randint(lo, max(lo, hi))])
+        v = r.choice([lo, max(lo, hi), r.randint(lo, max(lo, hi))])
+        # A client that serializes a float sends a whole number as `150.0`.
+        return float(v) if r.random() < 0.2 else v
     if k == "number":
         return r.choice([r.randint(-9, 9), r.randint(-900, 900) / 8, 1e3, 0])
     if k == "str":
@@ -162,10 +166,7 @@ def corrupt(r, s, v):
     """Make `v` (valid for `s`) wrong in one or two places, or leave it alone."""
     k = s["kind"]
     if r.random() < 0.25:
-        junk = [None, True, 7, -3, 2.5, "zz", [], {}, [1], {"zz": 1}, 1.0, 10**30, "é"]
-        if k == "str":
-            junk.remove("é")  # length is in bytes: keep bounded strings ASCII
-        return r.choice(junk)
+        return r.choice([None, True, 7, -3, 2.5, "zz", [], {}, [1], {"zz": 1}, 1.0, 10**30, "é", "😀"])
     if k == "array" and isinstance(v, list):
         out = [corrupt(r, s["item"], x) if r.random() < 0.5 else x for x in v]
         if r.random() < 0.2:
@@ -181,8 +182,8 @@ def corrupt(r, s, v):
         if r.random() < 0.3:
             out[r.choice(["extra", "a/b", "ñ", "q~r"])] = r.choice([1, None, [1], {}])
         return out
-    if k == "int" and isinstance(v, int) and not isinstance(v, bool):
-        return v + r.choice([-1000, -1, 1, 1000, 2**63])
+    if k == "int" and isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v + r.choice([-1000, -1, 1, 1000, 2**63, 0.5, -0.5, 1e19, -1e19, 0.0])
     if k == "str" and isinstance(v, str):
         return ascii_str(r, 0, 12)
     if k == "choice":
@@ -191,8 +192,15 @@ def corrupt(r, s, v):
 
 
 # ---------------------------------------------------------------- the reference
+def _whole(x):
+    """A JSON integer, JSON Schema's way: `150` and `150.0` alike (not a boolean)."""
+    if isinstance(x, bool):
+        return False
+    return isinstance(x, int) or (isinstance(x, float) and x.is_integer())
+
+
 def _is_int(checker, x):
-    return isinstance(x, int) and not isinstance(x, bool) and INT_MIN <= x <= INT_MAX
+    return _whole(x) and INT_MIN <= x <= INT_MAX
 
 
 class Ref:
@@ -213,8 +221,7 @@ class Ref:
             if v == "type":
                 wanted = e.schema.get("type")
                 wanted = wanted if isinstance(wanted, list) else [wanted]
-                big = ("integer" in wanted and isinstance(e.instance, int)
-                       and not isinstance(e.instance, bool))
+                big = "integer" in wanted and _whole(e.instance)
                 out.add((self.pointer(base), "range" if big else "type")); count += 1
             elif v == "required":
                 # "'name' is a required property"
@@ -232,11 +239,13 @@ class Ref:
                         "maxLength": "max_length", "enum": "choice", "minItems": "min_items",
                         "maxItems": "max_items"}[v]
                 out.add((self.pointer(base), code)); count += 1
-        # `enum` is the one keyword JSON Schema applies to a value of any type;
+        # `enum` applies to a value of any type, and the bounds to any number;
         # `schema` reports the type and stops (`docs/design.md` §3), so a value
         # of the wrong type is one error here, not two.
         for pointer, code in list(out):
-            if code == "choice" and (pointer, "type") in out:
+            # (`minimum`/`maximum` likewise apply to any *number*, so `2.5` against
+            # an integer range is a `type` error and also a bound one there.)
+            if code in ("choice", "minimum", "maximum") and (pointer, "type") in out:
                 out.discard((pointer, code))
                 count -= 1
         # A number outside int64 is one error, `range`; its bounds are not

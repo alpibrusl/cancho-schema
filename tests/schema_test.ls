@@ -143,8 +143,20 @@ fn test_integers_are_not_coerced_and_do_not_wrap[&h](heap: &!h Heap) -> [heap] i
         says(heap, sr, n, "9223372036854775807", 2, "ok");
         // Not an integer: a string, a float -- `1.0` included -- a boolean.
         says(heap, sr, n, "\"7\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
-        says(heap, sr, n, "1.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
         says(heap, sr, n, "true", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        // Whole numbers written as floats are integers, as in JSON Schema: a client
+        // that serializes a float sends `150.0`.
+        says(heap, sr, n, "1.0", 2, "ok");
+        says(heap, sr, n, "-0.0", 2, "ok");
+        says(heap, sr, n, "1.5e2", 2, "ok");
+        says(heap, sr, n, "1E3", 2, "ok");
+        says(heap, sr, n, "9.007199254740993e15", 2, "ok");
+        // ... and a fraction is not.
+        says(heap, sr, n, "1.5", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        says(heap, sr, n, "1e-1", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"type\",\"detail\":\"has the wrong type\"}]}");
+        // Whole, and beyond an `int`: `range`, whichever way it is written.
+        says(heap, sr, n, "1e30", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
+        says(heap, sr, n, "-1e30", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
         // Too big for an int: its own error, not a wrap.
         says(heap, sr, n, "9223372036854775808", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"range\",\"detail\":\"is outside the range of an integer\"}]}");
     }
@@ -335,7 +347,7 @@ fn schema_text[&h, &s](heap: &!h Heap, sc: &s schema.Schema, root: int, want: &s
 fn test_json_schema_for_an_object[&h](heap: &!h Heap) -> [heap] int {
     let (s, obj) = user(heap);
     borrow s as &sr in {
-        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8,\"x-length-unit\":\"bytes\"},\"age\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":150},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":2}},\"required\":[\"name\"],\"additionalProperties\":false}");
+        schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":8},\"age\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":150},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":2}},\"required\":[\"name\"],\"additionalProperties\":false}");
     }
     schema.drop(heap, s);
     return 0;
@@ -378,6 +390,61 @@ fn test_json_schema_escapes_what_it_was_given[&h](heap: &!h Heap) -> [heap] int 
     s = schema.add_field(heap, s2, obj, "k\"ey", str, true);
     borrow s as &sr in {
         schema_text(heap, sr, obj, "{\"type\":\"object\",\"properties\":{\"k\\\"ey\":{\"type\":\"string\",\"enum\":[\"a\\\"b\\\\c\"]}},\"required\":[\"k\\\"ey\"],\"additionalProperties\":false}");
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+// A float-spelled integer meets the bounds like any other, and `to_int` reads it.
+fn test_a_whole_float_is_checked_against_the_bounds_and_read_as_an_integer[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, age) = schema.new_int(heap, s, 0, 150);
+    s = s1;
+    borrow s as &sr in {
+        says(heap, sr, age, "150.0", 2, "ok");
+        says(heap, sr, age, "0.0", 2, "ok");
+        says(heap, sr, age, "151.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"maximum\",\"detail\":\"is above the maximum\"}]}");
+        says(heap, sr, age, "-1.0", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"minimum\",\"detail\":\"is below the minimum\"}]}");
+    }
+    schema.drop(heap, s);
+    let body = "[150.0, 36, 1e2, 7.5, \"x\"]";
+    let tape = box_slice(heap, json.tape_len(body), 0);
+    borrow mut tape as &!tw in {
+        let t = contents(tw);
+        json.parse(body, t);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 0)), 150);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 1)), 36);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 2)), 100);
+        // Not an integer: 0, which `validate` would have refused first.
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 3)), 0);
+        test.assert_eq(schema.to_int(body, t, json.at(t, 0, 4)), 0);
+    }
+    unbox_slice(heap, tape);
+    return 0;
+}
+
+// Length is counted in code points, as JSON Schema counts it: not bytes, and not
+// UTF-16 units.
+fn test_string_length_counts_code_points[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, two) = schema.new_string(heap, s, 2, 2);
+    s = s1;
+    borrow s as &sr in {
+        says(heap, sr, two, "\"ab\"", 2, "ok");
+        // Two bytes, one code point.
+        says(heap, sr, two, "\"\\u00e9\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"min_length\",\"detail\":\"is too short\"}]}");
+        says(heap, sr, two, "\"\\u00e9\\u00e9\"", 2, "ok");
+        // The same, written as raw UTF-8: three bytes each, one code point each.
+        says(heap, sr, two, "\"日本\"", 2, "ok");
+        says(heap, sr, two, "\"日本語\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"max_length\",\"detail\":\"is too long\"}]}");
+        // An astral character is one code point whether it is written as UTF-8
+        // (four bytes) or as an escaped surrogate pair (twelve characters).
+        says(heap, sr, two, "\"a😀\"", 2, "ok");
+        says(heap, sr, two, "\"a\\ud83d\\ude00\"", 2, "ok");
+        says(heap, sr, two, "\"\\ud83d\\ude00\\ud83d\\ude00\"", 2, "ok");
+        // A short escape is one.
+        says(heap, sr, two, "\"\\n\\t\"", 2, "ok");
+        says(heap, sr, two, "\"\\n\"", 2, "{\"type\":\"about:blank\",\"title\":\"Unprocessable Content\",\"status\":422,\"count\":1,\"errors\":[{\"pointer\":\"\",\"code\":\"min_length\",\"detail\":\"is too short\"}]}");
     }
     schema.drop(heap, s);
     return 0;

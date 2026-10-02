@@ -27,12 +27,10 @@
 //     has room for; the rest are counted and not stored, so a hostile body
 //     cannot make the list large.
 //
-// Decided, in `docs/design.md` §3: no coercion (`"3"` is not an integer, and
-// neither is `1.0`); the first of a duplicate key wins, as it does in
-// `json.get`, so the validator and the reader agree on which value a field has;
-// a string's length is counted in **bytes of the decoded text**, because
-// counting code points of an escaped string needs somewhere to decode it and a
-// validator has no heap.
+// Decided, in `docs/design.md` §3, §11 and §12: no coercion (`"3"` is not an
+// integer; `1.0` is, as in JSON Schema); the first of a duplicate key wins, as it
+// does in `json.get`, so the validator and the reader agree on which value a
+// field has; a string's length is counted in code points, as JSON Schema counts it.
 
 module schema;
 
@@ -182,7 +180,7 @@ pub fn new_number[&h](heap: &!h Heap, s: Schema) -> [heap] (Schema, int) {
     return push_node(heap, s, kind_number(), 0, 0, 0, 0, 0);
 }
 
-// A string of `min..=max` bytes once decoded. `add_choice` restricts it to a
+// A string of `min..=max` code points (as JSON Schema counts them). `add_choice` restricts it to a
 // set of values.
 pub fn new_string[&h](heap: &!h Heap, s: Schema, min: int, max: int) -> [heap] (Schema, int) {
     return push_node(heap, s, kind_string(), min, max, 0 - 1, 0 - 1, 0);
@@ -521,6 +519,109 @@ fn check_unknown[&s, &b, &t, &e](s: &s Schema, object_node: int, body: &b [byte]
     return 0;
 }
 
+// The value of the four hex digits at `raw[at..at + 4]`, or -1.
+fn hex4[&r](raw: &r [byte], at: int) -> [] int {
+    if at + 4 > len(raw) {
+        return 0 - 1;
+    }
+    var v = 0;
+    var i = 0;
+    while i < 4 {
+        let c = int_of(raw[at + i]);
+        var d = 0 - 1;
+        if c >= 48 && c <= 57 {
+            d = c - 48;
+        } else if c >= 97 && c <= 102 {
+            d = c - 87;
+        } else if c >= 65 && c <= 70 {
+            d = c - 55;
+        }
+        if d < 0 {
+            return 0 - 1;
+        }
+        v = v * 16 + d;
+        i = i + 1;
+    }
+    return v;
+}
+
+// How many code points the string whose text between the quotes is `raw` has,
+// counted as JSON Schema counts `minLength` and `maxLength`.
+//
+// `raw` is the source text, escapes and all, which `std.json` has already
+// checked is well-formed UTF-8 with no lone surrogate -- so a byte that is not a
+// continuation byte starts a code point, `\n` and its kind are one, `\uXXXX` is
+// one, and a surrogate pair (`\ud83d\ude00`) is one. Nothing is decoded and
+// nothing is allocated, which is why the validator needs no heap.
+fn code_points[&r](raw: &r [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(raw) {
+        let c = int_of(raw[i]);
+        if c == 92 && i + 1 < len(raw) {
+            if int_of(raw[i + 1]) == 117 {
+                let high = hex4(raw, i + 2);
+                if high >= 55296 && high <= 56319 {
+                    i = i + 12;
+                } else {
+                    i = i + 6;
+                }
+            } else {
+                i = i + 2;
+            }
+            n = n + 1;
+        } else {
+            if c & 192 != 128 {
+                n = n + 1;
+            }
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// Whether the number at `at` is an integer, JSON Schema's way: `150`, and also
+// `150.0` and `1.5e2`, which is what a client that serializes a float sends for
+// a whole number. 0: it is not one (a string, a boolean, `1.5`); 1: it is, and it
+// fits an `int`; 2: it is, and it does not.
+//
+// `docs/design.md` §11: this used to be "`1.0` is not an integer", and a
+// Schemathesis run against a real service showed that the generated schema said
+// `"type":"integer"` -- which accepts `150.0` -- while the validator refused it.
+fn integral[&b, &t](body: &b [byte], tape: &t [int], at: int) -> [] int {
+    if json.is_int(tape, at) {
+        if json.fits_int(body, tape, at) {
+            return 1;
+        }
+        return 2;
+    }
+    if json.kind(tape, at) != json.kind_float() {
+        return 0;
+    }
+    let x = json.to_float(body, tape, at);
+    // 2^63: every float at or past it is a whole number that no `int` holds.
+    if x >= 9223372036854775808.0 || x < 0.0 - 9223372036854775808.0 {
+        return 2;
+    }
+    if float_of(truncate(x)) == x {
+        return 1;
+    }
+    return 0;
+}
+
+// The value of an integer node, `150` and `150.0` alike. For use on a slot after
+// `validate` said 0, where the node is known to be an integer that fits; 0 for
+// anything else.
+pub fn to_int[&b, &t](body: &b [byte], tape: &t [int], at: int) -> [] int {
+    if json.is_int(tape, at) {
+        return json.to_int(body, tape, at);
+    }
+    if integral(body, tape, at) == 1 {
+        return truncate(json.to_float(body, tape, at));
+    }
+    return 0;
+}
+
 // Check the value at tape node `at` against schema node `node`. `track` says
 // whether fields may be written to `slots`: false inside an array.
 fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t [int], at: int, slots: &!u [int], errs: &!e [int], track: bool) -> [] int {
@@ -547,12 +648,13 @@ fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t 
         return 0;
     }
     if kind == kind_int() {
-        if !json.is_int(tape, at) {
+        let shape = integral(body, tape, at);
+        if shape == 0 {
             fail(errs, err_type(), node, at, 0 - 1);
-        } else if !json.fits_int(body, tape, at) {
+        } else if shape == 2 {
             fail(errs, err_range(), node, at, 0 - 1);
         } else {
-            let value = json.to_int(body, tape, at);
+            let value = to_int(body, tape, at);
             if value < node_at(s, node, 2) {
                 fail(errs, err_minimum(), node, at, 0 - 1);
             }
@@ -566,7 +668,7 @@ fn check[&s, &b, &t, &u, &e](s: &s Schema, node: int, body: &b [byte], tape: &t 
         if !json.is_string(tape, at) {
             fail(errs, err_type(), node, at, 0 - 1);
         } else {
-            let n = json.string_length(body, tape, at);
+            let n = code_points(json.string_view(body, tape, at));
             if n < node_at(s, node, 2) {
                 fail(errs, err_min_length(), node, at, 0 - 1);
             }
@@ -835,13 +937,6 @@ fn write_node[&h, &s](heap: &!h Heap, sc: &s Schema, node: int, w: json.Writer) 
             o = json.put_key(heap, o, "maxLength");
             o = json.put_int(heap, o, hi);
         }
-        // `minLength`/`maxLength` count code points in JSON Schema; this
-        // validator counts bytes of the decoded text (`docs/design.md` §9). The two
-        // agree for ASCII, so a document that is not says which one it means.
-        if lo > 0 || hi != int_max() {
-            o = json.put_key(heap, o, "x-length-unit");
-            o = json.put_string(heap, o, "bytes");
-        }
         if node_at(sc, node, 4) >= 0 {
             o = json.put_key(heap, o, "enum");
             o = json.begin_array(heap, o);
@@ -907,9 +1002,8 @@ fn write_node[&h, &s](heap: &!h Heap, sc: &s Schema, node: int, w: json.Writer) 
 // and `required` come out in the order they were added, so the same schema is the
 // same bytes on every run and can be hashed, diffed and checked in.
 //
-// It says what `validate` accepts, with one disclosed difference: string length
-// (see `x-length-unit` above). A nullable string with choices lists `null` among
-// its `enum` members, because `enum` constrains every type.
+// It says what `validate` accepts. A nullable string with choices lists `null`
+// among its `enum` members, because `enum` constrains every type.
 pub fn json_schema[&h, &s](heap: &!h Heap, sc: &s Schema, root: int) -> [heap] buffer.Buffer {
     return json.finish(write_node(heap, sc, root, json.writer(heap, 256)));
 }
