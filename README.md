@@ -24,26 +24,56 @@ assumed).
 > [`docs/design.md`](docs/design.md) says what was decided and marks every claim as
 > measured or not; §9-§12 are what building against real services found.
 
-## Try it
+## Quick start
 
-You need the `lex-sys` compiler (Rust; the toolchain is pinned by its `rust-toolchain.toml`):
-
-```
-git clone https://github.com/alpibrusl/lex-sys && cd lex-sys
-git checkout 232a59c8451aa7df0b72ab0d0ee053b26a951e86   # the revision CI builds and tests against
-cargo build --release -p lex-sys                        # -> target/release/lex-sys
-```
-
-Then, from this repository, run the example (a store records no hash of the `std` it was
-published against, so the compiler revision above is part of the contract):
+**1. Get the compiler** (Rust; the toolchain is pinned by its `rust-toolchain.toml`). A package
+store records no hash of the `std` it was published against, so the compiler revision is part
+of the contract -- this is the one CI builds and tests against:
 
 ```
-lex-sys run --std examples/validate.ls src/schema.ls
+git clone https://github.com/alpibrusl/lex-sys
+(cd lex-sys && git checkout bbeb75f6918105db6e49ec7c642f56009a911b8f && cargo build --release -p lex-sys)
+export PATH=$PWD/lex-sys/target/release:$PATH            # now `lex-sys` works
+git clone https://github.com/alpibrusl/lexsys-schema && cd lexsys-schema
 ```
 
-[`examples/validate.ls`](examples/validate.ls) builds a `User` schema, checks four request
-bodies against it, and prints the schema as JSON Schema. This is its output (CI checks
-that it still is -- [`examples/validate.out`](examples/validate.out)):
+**2. Run the smallest program** -- one schema, two bodies
+([`examples/quickstart.ls`](examples/quickstart.ls), 64 lines, 30 of them the `check` helper):
+
+```
+$ lex-sys run --std examples/quickstart.ls src/schema.ls
+ok
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":3,"errors":[{"pointer":"/name","code":"required","detail":"is required"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"},{"pointer":"/admin","code":"unknown","detail":"is not a known field"}]}
+```
+
+Three problems in one body, each with its JSON Pointer and a code a client can switch on.
+The schema that did it is six lines:
+
+```
+var s = schema.empty(h);
+let (s1, name) = schema.new_string(h, s, 1, 20);          // 1..20 code points
+let (s2, age)  = schema.new_int(h, s1, 0, 150);
+let (s3, user) = schema.new_object(h, s2, true);          // true: refuse unknown keys
+s = schema.add_field(h, s3, user, "name", name, true);    // required
+s = schema.add_field(h, s, user, "age", age, false);      // optional
+```
+
+**3. Use it in your own project** -- no copy of `schema.ls`: lock the names you call, fetch them
+(`fetch` refuses a store that no longer matches the lock), build. Here with the example as the
+"app":
+
+```
+mkdir ../myapp && cd ../myapp && cp ../lexsys-schema/examples/quickstart.ls app.ls
+STORE=../lexsys-schema/.lex-sys-vcs
+lex-sys vcs lock  --store $STORE -o schema.lock empty drop new_string new_int new_object add_field \
+                                               validate problem slot_count errors_len
+lex-sys vcs fetch --lock schema.lock --store $STORE -o deps/
+lex-sys build --std app.ls deps/*.ls -o app && ./app         # the same two lines of output
+```
+
+**4. Take the full tour:** `lex-sys run --std examples/validate.ls src/schema.ls` adds a string
+enum, an array, a nested JSON Pointer, malformed JSON, and prints the schema as JSON Schema
+2020-12. Its output is below and CI checks it (`examples/validate.out`).
 
 ```
 valid        : ok
@@ -152,24 +182,12 @@ in 64 bits -- an error, not a wrap).
 
 ## In another project
 
-A package is published to the checked-in store [`.lex-sys-vcs/`](.lex-sys-vcs/) and
-consumed by *locking* the names you use -- a lock pins each by hash, and `fetch` refuses a
-store that no longer matches. From a project that has this repository checked out beside it:
-
-```
-lex-sys vcs lock  --store ../lexsys-schema/.lex-sys-vcs -o schema.lock \
-    empty drop new_string new_int new_array new_object add_field add_choice \
-    validate problem json_schema slot_count errors_len
-lex-sys vcs fetch --lock schema.lock --store ../lexsys-schema/.lex-sys-vcs -o deps/
-lex-sys build --std app.ls deps/*.ls -o app
-```
-
-That is the path `examples/validate.ls` was built through to check the output above is
-identical to the source-level run. Lock the *names you call*; the closure they need comes
-with them. [`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s `deps/schema.lock` is
-a larger real one. Publishing a change is `rm -rf .lex-sys-vcs && lex-sys vcs publish --std
---store .lex-sys-vcs src/schema.ls` (a store refuses a changed body, so it is regenerated),
-followed by re-locking every consumer.
+Step 3 of the [quick start](#quick-start) is the whole consumer path. Lock the *names you
+call*; the closure they need comes with them. [`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s
+`deps/schema.lock` is a larger real one. Publishing a change is `rm -rf .lex-sys-vcs && lex-sys vcs
+publish --std --store .lex-sys-vcs src/schema.ls` (a store refuses a changed body, so it is
+regenerated), followed by re-locking every consumer -- the signatures do not change for a
+comment, but every source hash does.
 
 ## Tests
 
@@ -187,7 +205,7 @@ Schema: it must equal the schema the generator meant, and must give the referenc
 verdicts the library's own validator gave. Both suites are mutation-checked: a deliberate
 off-by-one in a bound, in the escaping of `~`, in the unknown-key check, or in the item
 counts fails them. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the
-pinned compiler and runs the unit tests, four differential seeds and the example.
+pinned compiler and runs the unit tests, four differential seeds and both examples.
 
 ## Licence
 

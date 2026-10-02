@@ -1,0 +1,2 @@
+ok
+{"type":"about:blank","title":"Unprocessable Content","status":422,"count":3,"errors":[{"pointer":"/name","code":"required","detail":"is required"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"},{"pointer":"/admin","code":"unknown","detail":"is not a known field"}]}
