@@ -63,6 +63,8 @@ class Gen:
             if lo is not None and hi is not None and lo > hi:
                 lo, hi = hi, lo
             s["min"], s["max"] = lo, hi
+            # a node that refuses U+0000 (a store that cannot hold it): `pattern` in JSON Schema
+            s["nul"] = r.random() < 0.35
         elif kind == "choice":
             s["values"] = r.sample(WORDS, r.randint(1, 3))
         elif kind == "array":
@@ -97,6 +99,8 @@ def json_schema(s):
             out["minLength"] = s["min"]
         if s["max"] is not None:
             out["maxLength"] = s["max"]
+        if s.get("nul"):
+            out["pattern"] = "^[^\\u0000]*$"
     elif k == "choice":
         # A nullable choice accepts `null` (`docs/design.md` §3); JSON Schema's
         # `enum` applies to every type, so null has to be one of the members.
@@ -148,7 +152,13 @@ def valid_value(r, s):
     if k == "str":
         lo = s["min"] or 0
         hi = s["max"] if s["max"] is not None else lo + 6
-        return ascii_str(r, *r.choice([(lo, lo), (hi, hi), (lo, hi)]))
+        text = ascii_str(r, *r.choice([(lo, lo), (hi, hi), (lo, hi)]))
+        if r.random() < 0.2:
+            # U+0000 (written `\u0000` by json.dumps): an error where the node refuses it,
+            # fine where it does not -- and a length one longer than asked for
+            at = r.randint(0, len(text))
+            text = text[:at] + "\x00" + text[at:]
+        return text
     if k == "choice":
         return r.choice(s["values"])
     if k == "array":
@@ -237,7 +247,7 @@ class Ref:
             else:
                 code = {"minimum": "minimum", "maximum": "maximum", "minLength": "min_length",
                         "maxLength": "max_length", "enum": "choice", "minItems": "min_items",
-                        "maxItems": "max_items"}[v]
+                        "maxItems": "max_items", "pattern": "nul"}[v]
                 out.add((self.pointer(base), code)); count += 1
         # `enum` applies to a value of any type, and the bounds to any number;
         # `schema` reports the type and stops (`docs/design.md` §3), so a value
@@ -318,6 +328,8 @@ class Emit:
         else:
             raise AssertionError(k)
         self.lines.append("s = %s;" % t)
+        if k == "str" and s.get("nul"):
+            self.lines.append("s = schema.forbid_nul(s, %s);" % v)
         if k == "choice":
             for value in s["values"]:
                 self.lines.append("s = schema.add_choice(heap, s, %s, %s);" % (v, lex_str(value)))

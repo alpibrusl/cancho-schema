@@ -287,3 +287,26 @@ of code points, an escape not counted) each fail the unit and differential tests
 **The pattern, twice now (§11, §12):** a decision recorded as "disclosed" is not
 a decision a client can see, and a test restricted to the inputs where two
 semantics agree cannot find the day they stop agreeing.
+
+## 13. A constraint the store imposes belongs in the schema (U+0000)
+
+Found by Schemathesis against `lexsys-web`'s users service on PostgreSQL (`lexsys-pg`): the body
+`{"name":"\u0000"}` satisfies the schema -- a JSON string may hold U+0000, and `"type":"string"` accepts it
+-- and PostgreSQL `text` cannot store it. The first answer was a 503; correcting it to a 422 is wrong too,
+because the OpenAPI document says that body is valid, and a request the contract accepts and the service then
+refuses is the same defect as the `150.0` of §11 from the other side. So the refusal is *in* the schema, where
+the document is generated from: `forbid_nul(s, node)` makes a string node refuse the escape `\u0000`
+(error `nul`, "must not contain U+0000"), and the JSON Schema for that node carries
+`"pattern":"^[^\\u0000]*$"`, which is what Schemathesis, `jsonschema` and a client generator all read.
+
+* **Only the escape.** A raw U+0000 byte is not valid inside a JSON string, so `std.json` has refused it before
+  the schema looks; the escape is the one spelling. The scan walks escapes the way `code_points` does, so
+  `\\u0000` (an escaped backslash, then the characters `u0000`) is not a NUL, and `\u00000` is a NUL and a zero.
+* **Per node, not global.** A tag in a `json` column may hold it (PostgreSQL's `json` stores the text; `jsonb`
+  would not), so the node that does not need the rule does not carry it.
+* **Checked** by the unit tests (the cases above, other escapes, a surrogate pair, a node that did not ask,
+  length and `nul` reported together, and the document), and by the differential test, which now gives a
+  random fifth of string nodes the flag and puts a U+0000 into a fifth of generated strings; the reference
+  is `jsonschema` with a `pattern`. Four mutations (the scan always false, the flag not consulted, the pattern
+  not written, an escape skipped one byte too short) each fail a suite; the last only the unit test, because
+  the differential alphabet has no backslash.
