@@ -9,7 +9,7 @@ env:
   # The compiler these sources are built and tested with. `vcs lock` pins
   # source hashes but not the bundled `std`, so the compiler version has to be
   # stated somewhere; here is where. Raising it is a deliberate act.
-  LEX_SYS_REV: 232a59c8451aa7df0b72ab0d0ee053b26a951e86
+  LEX_SYS_REV: bbeb75f6918105db6e49ec7c642f56009a911b8f
 
 jobs:
   test:
@@ -55,6 +55,9 @@ jobs:
 
       # The README quotes this output; the file it is checked against is the same
       # one, so a README that drifts from the code is a red build.
-      - name: The example prints what the README says
+      - name: The examples print what the README says
         working-directory: schema
-        run: ../lex-sys/target/release/lex-sys run --std examples/validate.ls src/schema.ls | diff - examples/validate.out
+        run: |
+          for e in quickstart validate; do
+            ../lex-sys/target/release/lex-sys run --std examples/$e.ls src/schema.ls | diff - examples/$e.out
+          done

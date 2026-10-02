@@ -1,0 +1,64 @@
+import std.buffer;
+import std.io;
+import std.json;
+import schema;
+
+// The smallest useful program: one schema, two bodies, a verdict for each.
+//
+//     lex-sys run --std examples/quickstart.ls src/schema.ls
+
+// Validate `body` against `root`; print "ok" or the problem document.
+fn check[&h, &i, &s, &b](heap: &!h Heap, io: &!i Io, sc: &s schema.Schema, root: int, body: &b [byte]) -> [heap, io_write] int {
+    let tape = box_slice(heap, json.tape_len(body), 0);
+    let slots = box_slice(heap, schema.slot_count(sc) + 1, 0);
+    let errs = box_slice(heap, schema.errors_len(8), 0);
+    borrow mut tape as &!tw in {
+        let t = contents(tw);
+        json.parse(body, t);
+        borrow mut slots as &!sw in {
+            borrow mut errs as &!ew in {
+                let e = contents(ew);
+                if schema.validate(sc, root, body, t, contents(sw), e) == 0 {
+                    io.write_all(io, "ok\n");
+                } else {
+                    let problem = schema.problem(heap, sc, body, t, e, 422, "Unprocessable Content");
+                    borrow problem as &pb in {
+                        io.write_all(io, buffer.bytes(pb));
+                    }
+                    buffer.drop(heap, problem);
+                    io.write_all(io, "\n");
+                }
+            }
+        }
+    }
+    unbox_slice(heap, errs);
+    unbox_slice(heap, slots);
+    unbox_slice(heap, tape);
+    return 0;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args } = split(world);
+    release(ffi);
+    release(fs);
+    release(args);
+    borrow mut heap as &!h in {
+        borrow mut io as &!i in {
+            // {"name": string 1..20 (required), "age": int 0..150} and nothing else
+            var s = schema.empty(h);
+            let (s1, name) = schema.new_string(h, s, 1, 20);
+            let (s2, age) = schema.new_int(h, s1, 0, 150);
+            let (s3, user) = schema.new_object(h, s2, true);
+            s = schema.add_field(h, s3, user, "name", name, true);
+            s = schema.add_field(h, s, user, "age", age, false);
+            borrow s as &sr in {
+                check(h, i, sr, user, "{\"name\":\"Ada\",\"age\":36}");
+                check(h, i, sr, user, "{\"age\":200,\"admin\":true}");
+            }
+            schema.drop(h, s);
+        }
+    }
+    release(io);
+    release(heap);
+    return 0;
+}
