@@ -1,0 +1,8 @@
+valid        : ok
+two problems : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":2,"errors":[{"pointer":"/name","code":"min_length","detail":"is too short"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"}]}
+nested path  : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/tags/1","code":"type","detail":"has the wrong type"}]}
+unknown key  : {"type":"about:blank","title":"Unprocessable Content","status":422,"count":1,"errors":[{"pointer":"/admin","code":"unknown","detail":"is not a known field"}]}
+not JSON     : not JSON
+
+JSON Schema 2020-12:
+{"type":"object","properties":{"name":{"type":"string","minLength":1,"maxLength":64},"email":{"type":"string","minLength":3,"maxLength":120},"age":{"type":"integer","minimum":0,"maximum":150},"role":{"type":"string","minLength":1,"maxLength":5,"enum":["admin","user","guest"]},"tags":{"type":"array","items":{"type":"string","minLength":1,"maxLength":16},"maxItems":8}},"required":["name"],"additionalProperties":false}

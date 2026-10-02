@@ -167,9 +167,10 @@ pub fn new_bool[&h](heap: &!h Heap, s: Schema) -> [heap] (Schema, int) {
     return push_node(heap, s, kind_bool(), 0, 0, 0, 0, 0);
 }
 
-// An integer in `lo..=hi`: `int_min()` and `int_max()` for no bound. A JSON
-// number with a fraction or an exponent is not an integer, even `1.0`, and one
-// outside `int`'s range is an error of its own rather than a wrap.
+// An integer in `lo..=hi`: `int_min()` and `int_max()` for no bound. A whole
+// number written as a float (`150.0`, `1.5e2`) is an integer, as in JSON Schema;
+// one with a fraction (`1.5`) is a `type` error, and one outside `int`'s range is
+// an error of its own (`range`) rather than a wrap.
 pub fn new_int[&h](heap: &!h Heap, s: Schema, lo: int, hi: int) -> [heap] (Schema, int) {
     return push_node(heap, s, kind_int(), lo, hi, 0, 0, 0);
 }
