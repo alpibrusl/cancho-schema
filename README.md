@@ -1,5 +1,7 @@
 # lexsys-schema
 
+[![ci](https://github.com/alpibrusl/lexsys-schema/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lexsys-schema/actions/workflows/ci.yml)
+
 A schema for [lex-sys](https://github.com/alpibrusl/lex-sys), written as **data**: one
 value, built when the program starts, that drives
 
@@ -16,25 +18,32 @@ No C: it is ordinary lex-sys over `std.json`, `std.buffer` and `std.vec`, and
 else** -- no console, filesystem, network, command line or foreign code (checked, not
 assumed).
 
-> **Status:** built -- the builder, the validator, JSON-pointer error locations,
-> `problem+json` and JSON Schema generation, all in [`src/schema.ls`](src/schema.ls),
-> tested against an independent validator ([below](#tests)). Not built: `$ref`/`$defs`
-> (a node used twice is written twice), bounds on floats, and assembling an OpenAPI
-> document (that is `lexsys-web`'s, from its routes plus these fragments).
-> [`docs/design.md`](docs/design.md) says what was decided and marks every claim as
-> measured or not; §9-§12 are what building against real services found.
+## Status
+
+Built: the builder, the validator, JSON-pointer error locations, `problem+json` and JSON Schema generation, all in
+[`src/schema.ls`](src/schema.ls), tested against an independent validator ([below](#tests)).
+[`docs/design.md`](docs/design.md) says what was decided and marks every claim as measured or not; sections 9 to 13 are what
+building against real services found.
+
+Not built: see [Limitations](#limitations).
+
+## Requirements
+
+- The **lex-sys** compiler at the revision this repository's CI builds with (below). A package store records no hash of the `std`
+  it was published against, so the compiler revision is part of the contract.
+- Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
+- To run the differential test: `python3` and `pip install jsonschema`.
 
 ## Quick start
 
-**1. Get the compiler** (Rust; the toolchain is pinned by its `rust-toolchain.toml`). A package
-store records no hash of the `std` it was published against, so the compiler revision is part
-of the contract -- this is the one CI builds and tests against:
+**1. Get the compiler**, at the revision CI builds and tests against (it is read from `ci.yml`, so it cannot drift from this text):
 
 ```
 git clone https://github.com/alpibrusl/lex-sys
-(cd lex-sys && git checkout bbeb75f6918105db6e49ec7c642f56009a911b8f && cargo build --release -p lex-sys)
-export PATH=$PWD/lex-sys/target/release:$PATH            # now `lex-sys` works
 git clone https://github.com/alpibrusl/lexsys-schema && cd lexsys-schema
+REV=$(sed -n 's/^ *LEX_SYS_REV: *//p' .github/workflows/ci.yml)
+(cd ../lex-sys && git checkout "$REV" && cargo build --release -p lex-sys)
+export PATH=$PWD/../lex-sys/target/release:$PATH         # now `lex-sys` works
 ```
 
 **2. Run the smallest program** -- one schema, two bodies
@@ -86,7 +95,15 @@ JSON Schema 2020-12:
 {"type":"object","properties":{"name":{"type":"string","minLength":1,"maxLength":64},"email":{"type":"string","minLength":3,"maxLength":120},"age":{"type":"integer","minimum":0,"maximum":150},"role":{"type":"string","minLength":1,"maxLength":5,"enum":["admin","user","guest"]},"tags":{"type":"array","items":{"type":"string","minLength":1,"maxLength":16},"maxItems":8}},"required":["name"],"additionalProperties":false}
 ```
 
-## How it reads
+## Examples
+
+Two runnable programs, both checked in CI against their recorded output:
+
+- [`examples/quickstart.ls`](examples/quickstart.ls): one schema, two bodies, every error at once (step 2 above).
+- [`examples/validate.ls`](examples/validate.ls): a string enum, an array, a nested JSON Pointer, malformed JSON, and the schema
+  printed as JSON Schema 2020-12 (step 4 above, output in [`examples/validate.out`](examples/validate.out)).
+
+## Usage
 
 (`&s` below is shorthand for a borrow of the schema, `borrow s as &sr in { ... }` -- the
 example program has the real syntax.)
@@ -135,7 +152,7 @@ let doc = schema.json_schema(heap, &s, user);               // JSON Schema 2020-
 The full program is [`examples/validate.ls`](examples/validate.ls); every call is also
 exercised in [`tests/schema_test.ls`](tests/schema_test.ls).
 
-## The API
+## API
 
 | Build (each returns the schema and the new node's id, except where noted) | |
 |---|---|
@@ -167,7 +184,7 @@ Error codes: `type`, `required`, `unknown`, `minimum`, `maximum`, `min_length`,
 `max_length`, `choice`, `min_items`, `max_items`, `range` (an integer that does not fit
 in 64 bits -- an error, not a wrap), `nul` (U+0000 in a string that forbids it).
 
-## What it decides (so you do not have to guess)
+## Behaviour (so you do not have to guess)
 
 * **No coercion.** `"36"` is not an integer; `true` is not a string.
 * **Whole floats are integers**, as in JSON Schema: `150.0` and `1.5e2` are; `1.5` is a
@@ -181,7 +198,7 @@ in 64 bits -- an error, not a wrap), `nul` (U+0000 in a string that forbids it).
 * **Strict objects refuse unknown keys**, at the key's own pointer.
 * A repeated key: the first occurrence is the one validated and stored in the slot.
 
-## In another project
+## Using it in another project
 
 Step 3 of the [quick start](#quick-start) is the whole consumer path. Lock the *names you
 call*; the closure they need comes with them. [`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s
@@ -207,6 +224,33 @@ verdicts the library's own validator gave. Both suites are mutation-checked: a d
 off-by-one in a bound, in the escaping of `~`, in the unknown-key check, or in the item
 counts fails them. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) builds the
 pinned compiler and runs the unit tests, four differential seeds and both examples.
+
+## Documentation
+
+- [`docs/design.md`](docs/design.md): why the schema is data and not types, the validation rules, the error format, how it is
+  tested, and what building each slice found (sections 9 to 13: a real service exposed the whole-float, string-length and U+0000
+  defects).
+
+## Layout
+
+```
+src/schema.ls          the whole library: builder, validator, JSON Pointer, problem+json, JSON Schema
+tests/schema_test.ls   unit tests (lex-sys)
+tests/differential.py  random (schema, document) pairs against the jsonschema package
+examples/              quickstart.ls and validate.ls, with their recorded output
+docs/design.md         the design and what building it found
+```
+
+## Limitations
+
+Not built: `$ref` / `$defs` (a node used twice is written twice), bounds on floats, and assembling an OpenAPI document (that is
+[`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s job, from its routes plus these fragments). The list of errors is
+bounded by the room you give `errs`; the count is always exact.
+
+## Contributing
+
+Every change goes through what CI runs: the unit tests, the differential test and both examples (their output must match the recorded files). Design
+before code, in `docs/`, with claims measured; a claim that turns out false is corrected in place.
 
 ## Licence
 
