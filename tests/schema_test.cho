@@ -504,3 +504,234 @@ fn test_json_schema_says_so_in_a_pattern[&h](heap: &!h Heap) -> [heap] int {
     schema.drop(heap, s);
     return 0;
 }
+
+// ---------------------------------------------------------------------
+// Text that is not JSON (`docs/design.md` §14)
+// ---------------------------------------------------------------------
+
+fn test_text_an_integer_is_decimal_digits_and_nothing_else[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, n) = schema.new_int(heap, s, 1, 100);
+    s = s1;
+    borrow s as &sr in {
+        test.assert_eq(schema.check_text(sr, n, "1"), 0);
+        test.assert_eq(schema.check_text(sr, n, "100"), 0);
+        // Leading zeros are digits.
+        test.assert_eq(schema.check_text(sr, n, "007"), 0);
+        test.assert_eq(schema.int_of_text("007"), 7);
+        test.assert_eq(schema.int_of_text("100"), 100);
+        test.assert_eq(schema.check_text(sr, n, "0"), schema.err_minimum());
+        test.assert_eq(schema.check_text(sr, n, "101"), schema.err_maximum());
+        test.assert_eq(schema.check_text(sr, n, "-1"), schema.err_minimum());
+        // Not an integer, however it is spelled: no coercion.
+        test.assert_eq(schema.check_text(sr, n, ""), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "-"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "+5"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, " 5"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "5 "), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "5.0"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "1e2"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "0x5"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "5a"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "--5"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, n, "%35"), schema.err_type());
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_text_an_integer_does_not_wrap[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, n) = schema.new_int(heap, s, schema.int_min(), schema.int_max());
+    s = s1;
+    borrow s as &sr in {
+        test.assert_eq(schema.check_text(sr, n, "9223372036854775807"), 0);
+        test.assert_eq(schema.int_of_text("9223372036854775807"), schema.int_max());
+        test.assert_eq(schema.check_text(sr, n, "-9223372036854775807"), 0);
+        test.assert_eq(schema.int_of_text("-9223372036854775807"), 0 - schema.int_max());
+        // One past, and far past: `range`, not a wrap, not a trap.
+        test.assert_eq(schema.check_text(sr, n, "9223372036854775808"), schema.err_range());
+        test.assert_eq(schema.check_text(sr, n, "-9223372036854775808"), schema.err_range());
+        test.assert_eq(schema.check_text(sr, n, "99999999999999999999999999999999"), schema.err_range());
+        test.assert_eq(schema.check_text(sr, n, "00000000000000000000000000000000000007"), 0);
+        test.assert_eq(schema.int_of_text("00000000000000000000000000000000000007"), 7);
+        // A non-digit after a value that no longer fits is still a `type`.
+        test.assert_eq(schema.check_text(sr, n, "99999999999999999999x"), schema.err_type());
+        // `int_of_text` is 0 for what is not an integer.
+        test.assert_eq(schema.int_of_text("x"), 0);
+        test.assert_eq(schema.int_of_text("99999999999999999999"), 0);
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_text_a_bool_is_true_or_false[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, b) = schema.new_bool(heap, s);
+    s = s1;
+    borrow s as &sr in {
+        test.assert_eq(schema.check_text(sr, b, "true"), 0);
+        test.assert_eq(schema.check_text(sr, b, "false"), 0);
+        test.assert(schema.bool_of_text("true"));
+        test.assert(!schema.bool_of_text("false"));
+        test.assert_eq(schema.check_text(sr, b, "True"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, b, "1"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, b, ""), schema.err_type());
+        test.assert_eq(schema.check_text(sr, b, "truee"), schema.err_type());
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_text_a_string_counts_code_points_and_takes_choices[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, name) = schema.new_string(heap, s, 2, 4);
+    let (s2, role) = schema.new_string(heap, s1, 0, schema.int_max());
+    s = schema.add_choice(heap, s2, role, "admin");
+    s = schema.add_choice(heap, s, role, "user");
+    borrow s as &sr in {
+        test.assert_eq(schema.check_text(sr, name, "ab"), 0);
+        test.assert_eq(schema.check_text(sr, name, "abcd"), 0);
+        test.assert_eq(schema.check_text(sr, name, "a"), schema.err_min_length());
+        test.assert_eq(schema.check_text(sr, name, ""), schema.err_min_length());
+        test.assert_eq(schema.check_text(sr, name, "abcde"), schema.err_max_length());
+        // Code points, not bytes: four of two bytes each is 8 bytes and 4 points; "é" is one.
+        test.assert_eq(schema.check_text(sr, name, "éééé"), 0);
+        test.assert_eq(schema.check_text(sr, name, "ééééé"), schema.err_max_length());
+        test.assert_eq(schema.check_text(sr, name, "é"), schema.err_min_length());
+        // Outside the basic plane: one point of four bytes, so two of them are two.
+        test.assert_eq(schema.check_text(sr, name, "😀😀"), 0);
+        test.assert_eq(schema.check_text(sr, role, "admin"), 0);
+        test.assert_eq(schema.check_text(sr, role, "user"), 0);
+        test.assert_eq(schema.check_text(sr, role, "root"), schema.err_choice());
+        test.assert_eq(schema.check_text(sr, role, "Admin"), schema.err_choice());
+        test.assert_eq(schema.check_text(sr, role, ""), schema.err_choice());
+        test.assert_eq(schema.check_text(sr, role, "adminx"), schema.err_choice());
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+// A text built byte by byte, because a literal cannot hold what is not well-formed.
+fn raw[&h](heap: &!h Heap, a: int, b: int, c: int, d: int, n: int) -> [heap] buffer.Buffer {
+    var t = buffer.empty(heap, 8);
+    if n > 0 {
+        t = buffer.push(heap, t, byte_of(a));
+    }
+    if n > 1 {
+        t = buffer.push(heap, t, byte_of(b));
+    }
+    if n > 2 {
+        t = buffer.push(heap, t, byte_of(c));
+    }
+    if n > 3 {
+        t = buffer.push(heap, t, byte_of(d));
+    }
+    return t;
+}
+
+fn judged[&h, &s](heap: &!h Heap, sc: &s schema.Schema, node: int, a: int, b: int, c: int, d: int, n: int) -> [heap] int {
+    let t = raw(heap, a, b, c, d, n);
+    var code = 0;
+    borrow t as &tr in {
+        code = schema.check_text(sc, node, buffer.bytes(tr));
+    }
+    buffer.drop(heap, t);
+    return code;
+}
+
+fn test_text_a_string_must_be_well_formed_utf8[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, str) = schema.new_string(heap, s, 0, schema.int_max());
+    s = s1;
+    let bad = schema.err_type();
+    borrow s as &sr in {
+        // Well formed: ASCII, 2, 3 and 4 bytes, the ends of each range.
+        test.assert_eq(judged(heap, sr, str, 65, 0, 0, 0, 1), 0);
+        test.assert_eq(judged(heap, sr, str, 194, 128, 0, 0, 2), 0);
+        test.assert_eq(judged(heap, sr, str, 223, 191, 0, 0, 2), 0);
+        test.assert_eq(judged(heap, sr, str, 224, 160, 128, 0, 3), 0);
+        test.assert_eq(judged(heap, sr, str, 237, 159, 191, 0, 3), 0);
+        test.assert_eq(judged(heap, sr, str, 238, 128, 128, 0, 3), 0);
+        test.assert_eq(judged(heap, sr, str, 240, 144, 128, 128, 4), 0);
+        test.assert_eq(judged(heap, sr, str, 244, 143, 191, 191, 4), 0);
+        // A continuation byte alone, and a lead with nothing after it.
+        test.assert_eq(judged(heap, sr, str, 128, 0, 0, 0, 1), bad);
+        test.assert_eq(judged(heap, sr, str, 194, 0, 0, 0, 1), bad);
+        test.assert_eq(judged(heap, sr, str, 226, 130, 0, 0, 2), bad);
+        test.assert_eq(judged(heap, sr, str, 240, 144, 128, 0, 3), bad);
+        // A lead followed by a non-continuation.
+        test.assert_eq(judged(heap, sr, str, 194, 65, 0, 0, 2), bad);
+        // Overlong: two bytes for U+0000..U+007F, three for U+0000..U+07FF, four for < U+10000.
+        test.assert_eq(judged(heap, sr, str, 192, 128, 0, 0, 2), bad);
+        test.assert_eq(judged(heap, sr, str, 193, 191, 0, 0, 2), bad);
+        test.assert_eq(judged(heap, sr, str, 224, 128, 128, 0, 3), bad);
+        test.assert_eq(judged(heap, sr, str, 224, 159, 191, 0, 3), bad);
+        test.assert_eq(judged(heap, sr, str, 240, 128, 128, 128, 4), bad);
+        test.assert_eq(judged(heap, sr, str, 240, 143, 191, 191, 4), bad);
+        // A surrogate, and past U+10FFFF.
+        test.assert_eq(judged(heap, sr, str, 237, 160, 128, 0, 3), bad);
+        test.assert_eq(judged(heap, sr, str, 237, 191, 191, 0, 3), bad);
+        test.assert_eq(judged(heap, sr, str, 244, 144, 128, 128, 4), bad);
+        test.assert_eq(judged(heap, sr, str, 245, 128, 128, 128, 4), bad);
+        // Bytes that never occur.
+        test.assert_eq(judged(heap, sr, str, 254, 0, 0, 0, 1), bad);
+        test.assert_eq(judged(heap, sr, str, 255, 0, 0, 0, 1), bad);
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+fn test_text_forbid_nul_refuses_a_zero_byte[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, plain) = schema.new_string(heap, s, 0, 8);
+    let (s2, strict) = schema.new_string(heap, s1, 0, 8);
+    s = schema.forbid_nul(s2, strict);
+    borrow s as &sr in {
+        // Zero is well-formed UTF-8, so the node that did not ask takes it.
+        test.assert_eq(judged(heap, sr, plain, 97, 0, 98, 0, 3), 0);
+        test.assert_eq(judged(heap, sr, strict, 97, 0, 98, 0, 3), schema.err_nul());
+        test.assert_eq(judged(heap, sr, strict, 0, 0, 0, 0, 1), schema.err_nul());
+        test.assert_eq(judged(heap, sr, strict, 97, 98, 0, 0, 2), 0);
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+// The first thing wrong, in the order the kind's rules are listed.
+fn test_text_the_first_error_is_the_one_reported[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, str) = schema.new_string(heap, s, 3, 4);
+    s = schema.add_choice(heap, s1, str, "abcd");
+    borrow s as &sr in {
+        // Too short and not a choice: `min_length` first.
+        test.assert_eq(schema.check_text(sr, str, "x"), schema.err_min_length());
+        // Too long and not a choice: `max_length` first.
+        test.assert_eq(schema.check_text(sr, str, "xxxxx"), schema.err_max_length());
+        test.assert_eq(schema.check_text(sr, str, "xxx"), schema.err_choice());
+        test.assert_eq(schema.check_text(sr, str, "abcd"), 0);
+    }
+    schema.drop(heap, s);
+    return 0;
+}
+
+// A node that is not a parameter kind refuses every text, so that declaring one by mistake
+// cannot make a validator that accepts anything; `any` accepts everything.
+fn test_text_other_kinds[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, item) = schema.new_int(heap, s, 0, 9);
+    let (s2, arr) = schema.new_array(heap, s1, item, 0, 4);
+    let (s3, obj) = schema.new_object(heap, s2, true);
+    let (s4, num) = schema.new_number(heap, s3);
+    let (s5, any) = schema.new_any(heap, s4);
+    s = s5;
+    borrow s as &sr in {
+        test.assert_eq(schema.check_text(sr, arr, "[1]"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, obj, "{}"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, num, "1.5"), schema.err_type());
+        test.assert_eq(schema.check_text(sr, any, "anything at all"), 0);
+        test.assert_eq(schema.check_text(sr, any, ""), 0);
+    }
+    schema.drop(heap, s);
+    return 0;
+}

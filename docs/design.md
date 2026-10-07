@@ -310,3 +310,57 @@ the document is generated from: `forbid_nul(s, node)` makes a string node refuse
   is `jsonschema` with a `pattern`. Four mutations (the scan always false, the flag not consulted, the pattern
   not written, an escape skipped one byte too short) each fail a suite; the last only the unit test, because
   the differential alphabet has no backslash.
+
+## 14. Text that is not JSON (`check_text`)
+
+`cancho-web` designs validating a request's path, query and header parameters before the handler
+runs (its `docs/design.md` §9). Those arrive as text, with no tape, and the node that documents
+a parameter -- the same node, so the contract cannot say one thing and the server another -- has
+to judge it. The first slice of that is here: `check_text(s, node, text)`, with `int_of_text` and
+`bool_of_text` to read a value after it said 0.
+
+**Decided.**
+
+* **The same codes, the same bounds, the same order of kinds as `check`.** A parameter that
+  breaks a rule gets the code a body would: `type`, `range`, `minimum`, `maximum`, `min_length`,
+  `max_length`, `choice`, `nul`. A client that switches on codes handles both.
+* **One error per text, the first.** A body can have many errors because it has many values; one
+  text has one value, and "too short" together with "not a choice" adds a sentence, not
+  information. The order is the order `check` tests them in. (`cancho-web` collects an error per
+  *parameter*, which is the useful axis.)
+* **No coercion.** An integer is an optional `-` and one or more ASCII digits and nothing else:
+  `+5`, `5.0`, `1e2`, `0x5`, ` 5` and the empty text are `type`. This is *not* §11's rule for
+  bodies, and the difference is deliberate: `150.0` is JSON Schema's integer because JSON has one
+  number syntax and a client that serializes a float sends it; a query string has no float to
+  serialize. Leading zeros are digits (the hand-written parser in `cancho-web`'s example accepted
+  them; changing which requests are valid is a contract change and belongs in its own slice).
+* **`range`, not a 17-digit cap.** `cancho-web`'s sketch carried over the 17-digit limit of its
+  hand-written `number_of`. A cap the node does not state is the defect §11 and `cancho-web`
+  §7 describe -- true of the server, false of the contract -- so the limit here is `int`'s own: a
+  magnitude past `int_max()` is `range`, and a node that wants a tighter limit declares one, as the
+  users example's `id` already does (`maximum` 99999999999999999). `-9223372036854775808` is
+  `range`: the one value a magnitude built as a non-negative number cannot hold, and not worth a
+  second code path.
+* **UTF-8 is checked.** `std.json` has already refused malformed text before `check` counts code
+  points; a header or a decoded path segment has been checked by no one, and `check_text` counts
+  code points the same way (§12), so it must not count a malformed sequence. Malformed is `type`:
+  shortest forms only, no surrogate (U+D800..U+DFFF), nothing past U+10FFFF.
+* **The text is decoded.** Percent-decoding needs a destination buffer and a validator that
+  allocates would not be this one, so a caller with an encoded value decodes it first. A header
+  needs none.
+* **A node that is not a parameter refuses.** `number`, `array` and `object` nodes judge every
+  text `type`, so a declaration made by mistake cannot become a validator that accepts anything;
+  `any` accepts everything. Nullability is not consulted: text has no `null`.
+
+**Checked** by 8 unit tests: the integer grammar (including each of the non-integers above); the
+edges of `int` (`9223372036854775807` is a value, `...808` and thirty nines are `range`, a non-digit
+after a value that no longer fits is still `type`, and 36 leading zeros are a 7); bool; code points
+(2-byte and 4-byte) and `add_choice`; well-formed UTF-8 against 24 byte sequences (the ends of each
+range, a lone continuation, a truncated lead, overlong two-, three- and four-byte forms, a surrogate
+both ends, past U+10FFFF, `0xFE` and `0xFF`); `forbid_nul` on a real zero byte; the order of errors;
+and the kinds that are not parameters. Five mutations (the overflow guard off by one, the surrogate
+range's edge, the four-byte overlong limit, `forbid_nul` ignored, `0xC0` and `0xC1` accepted as
+leads) each fail a test. **Not extended:** `tests/differential.py`. It compares the validator with
+`jsonschema` on JSON documents; text has no reference implementation there, and the rule that
+matters (an integer is digits) would be tested against the same rule written again in Python.
+The existing differential run (seeds 1-2, 250 cases each) and both examples' output are unchanged.
