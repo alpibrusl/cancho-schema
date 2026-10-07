@@ -355,7 +355,7 @@ to judge it. The first slice of that is here: `check_text(s, node, text)`, with 
 **Checked** by 8 unit tests: the integer grammar (including each of the non-integers above); the
 edges of `int` (`9223372036854775807` is a value, `...808` and thirty nines are `range`, a non-digit
 after a value that no longer fits is still `type`, and 36 leading zeros are a 7); bool; code points
-(2-byte and 4-byte) and `add_choice`; well-formed UTF-8 against 24 byte sequences (the ends of each
+(2-byte and 4-byte) and `add_choice`; well-formed UTF-8 against 25 byte sequences (8 well formed, 17 not) (the ends of each
 range, a lone continuation, a truncated lead, overlong two-, three- and four-byte forms, a surrogate
 both ends, past U+10FFFF, `0xFE` and `0xFF`); `forbid_nul` on a real zero byte; the order of errors;
 and the kinds that are not parameters. Five mutations (the overflow guard off by one, the surrogate
