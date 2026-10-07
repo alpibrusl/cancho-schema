@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Differential test: `schema.validate` against an independent implementation.
 
-    python3 tests/differential.py [--cases N] [--seed S] [--lex-sys PATH]
+    python3 tests/differential.py [--cases N] [--seed S] [--cancho PATH]
 
 Random (schema, document) pairs are generated in Python as JSON Schema and
-also as a lex-sys program that builds the same schema. The program validates
+also as a cancho program that builds the same schema. The program validates
 every document and prints, for each, how many errors it found and each stored
 error's (JSON pointer, code). The reference is the `jsonschema` package
 (Draft 2020-12), with the verdicts compared as *sets of (pointer, code)* and
 counted.
 
 Where the two are specified differently on purpose (`docs/design.md` §3) the
-reference is bent to the lex-sys rule, and the generator stays out of the
+reference is bent to the cancho rule, and the generator stays out of the
 corners that are only *documented* differences. Bending the reference is how a
 wrong decision hides (`docs/design.md` §11, §12), so each bend is listed:
 
@@ -34,7 +34,7 @@ import jsonschema
 from jsonschema import Draft202012Validator, validators
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "..", "src", "schema.ls")
+SRC = os.path.join(HERE, "..", "src", "schema.cho")
 INT_MIN, INT_MAX = -(2**63), 2**63 - 1
 
 KEYS = ["a", "b", "name", "n", "x y", "a/b", "c~d", "é", "", "k1", "k2", "tags"]
@@ -414,7 +414,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cases", type=int, default=300)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--lex-sys", default=os.environ.get("LEX_SYS", "lex-sys"))
+    ap.add_argument("--cancho", default=os.environ.get("CANCHO", "cancho"))
     args = ap.parse_args()
 
     r = random.Random(args.seed)
@@ -437,10 +437,10 @@ def main():
     src += "        }\n    }\n    release(io);\n    release(heap);\n    return 0;\n}\n"
 
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "driver.ls")
+        path = os.path.join(tmp, "driver.cho")
         with open(path, "w") as f:
             f.write(src)
-        run = subprocess.run([args.lex_sys, "run", path, SRC, "--std"], capture_output=True)
+        run = subprocess.run([args.cancho, "run", path, SRC, "--std"], capture_output=True)
     if run.returncode != 0:
         sys.stderr.write(run.stderr.decode(errors="replace"))
         sys.stderr.write("the generated program did not run (exit %d)\n" % run.returncode)
@@ -479,7 +479,7 @@ def main():
         if lex_count != count or lex_errs != errs:
             bad += 1
             if bad <= 5:
-                print("DISAGREE case %d\n  document: %s\n  schema:   %s\n  reference: %d %s\n  lex-sys:   %s %s"
+                print("DISAGREE case %d\n  document: %s\n  schema:   %s\n  reference: %d %s\n  cancho:   %s %s"
                       % (index, text, json.dumps(json_schema(s)), count, sorted(errs), lex_count,
                          sorted(lex_errs) if lex_errs is not None else None))
     print("%d cases (%d valid, %d invalid): %s" % (

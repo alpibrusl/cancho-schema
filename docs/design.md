@@ -1,13 +1,13 @@
-# lexsys-schema: a schema as data
+# cancho-schema: a schema as data
 
 > **Status: slices 1 and 2 built** (builder, validator, pointers, `problem+json`,
-> JSON Schema generation); assembling the OpenAPI document is `lexsys-web`'s. §9 records what building it found, and
+> JSON Schema generation); assembling the OpenAPI document is `cancho-web`'s. §9 records what building it found, and
 > corrects the sections it contradicted. Where a claim rests on something
 > measured it says what and where; where it does not, it says so.
 
 ## 1. What it is for
 
-`lex-sys` has the pieces of a request path: `std.http` parses, `std.route`
+`cancho` has the pieces of a request path: `std.http` parses, `std.route`
 picks a handler, `std.json` reads and writes. What an API needs next, and what
 `examples/api` does by hand in `add`, is *checking the body*: is `a` present,
 is it an integer, did it fit, what do we say when it is not. Written by hand
@@ -22,7 +22,7 @@ enforcement points* -- applied to a request body.
 ## 2. Why data, not types
 
 Python's answer (pydantic) is a class whose annotations are read by a library.
-`lex-sys` has no reflection, no macros and no traits, so there is nothing to
+`cancho` has no reflection, no macros and no traits, so there is nothing to
 read an annotation. It has the opposite property: a value built once and walked
 many times is the idiom the library already uses (`route.Router`, `std.map`).
 So a schema is a **value** -- an arena of nodes in a `Vec[int]` plus a byte pool
@@ -75,7 +75,7 @@ that does not exist):
   is deciding what the client meant. (`150.0` *is* an integer -- see §11, which
   corrects this section: it said it was not.)
 * **Duplicate keys: the first wins**, because that is what `json.get` does
-  (`std/json.ls`, the comment on `get`). The validator and the reader must agree
+  (`std/json.cho`, the comment on `get`). The validator and the reader must agree
   on which `age` an object has; if they did not, a body could pass validation on
   one and be read as the other.
 * **Strict JSON underneath** (`std.json` refuses what RFC 8259 refuses), so
@@ -115,7 +115,7 @@ these fragments; this crate is responsible only for the schema half.
 
 ## 6. How it will be tested
 
-The standard this repository inherits from `lex-sys`:
+The standard this repository inherits from `cancho`:
 
 * **Differential, against an independent implementation.** A corpus of
   (schema, body) pairs, validated here and by a reference validator in another
@@ -125,7 +125,7 @@ The standard this repository inherits from `lex-sys`:
   names is not testing it.
 * **Hostile input.** Deep nesting, a million-element array, a body of one
   hundred thousand unknown keys, a string of invalid UTF-8: none may reach a
-  panic or allocate more than the limits say. `lex-sys` requires that no input
+  panic or allocate more than the limits say. `cancho` requires that no input
   reach a trap it did not declare.
 * **The generated schema validates what the validator accepts**: bodies the
   validator accepts must be accepted by a stock JSON Schema validator given
@@ -134,12 +134,12 @@ The standard this repository inherits from `lex-sys`:
 
 ## 7. Packaging
 
-A `lex-sys` package (`docs/package-system.md` in that repo): `src/schema.ls`
-published into a `.lex-sys-vcs` store with `vcs publish --std`, consumed by
+A `cancho` package (`docs/package-system.md` in that repo): `src/schema.cho`
+published into a `.cancho-vcs` store with `vcs publish --std`, consumed by
 `vcs lock` + `vcs fetch` + `build --std`. It needs the compiler's bundled `std`
 and **nothing pins which `std`**: a store records no hash of the library it was
 published against (`package-system.md` §4.8). This repository will record the
-`lex-sys` version it is tested against in CI, because the toolchain will not.
+`cancho` version it is tested against in CI, because the toolchain will not.
 
 ## 8. Open questions
 
@@ -221,12 +221,12 @@ be removed, the keyword is gone, and the generated schema is plain JSON Schema.
 **Not done.** `$ref`/`$defs`: a schema node used twice is written twice. That is
 correct but not compact, and it is the first thing a large API will want;
 recursion (§8.3) needs it and is still deferred. The OpenAPI document itself --
-paths, parameters, responses -- is assembled by `lexsys-web` from its route
+paths, parameters, responses -- is assembled by `cancho-web` from its route
 table and these fragments.
 
 ## 11. What running a real service against it found
 
-`lexsys-web` has `examples/users`: a service that validates with `schema`, answers
+`cancho-web` has `examples/users`: a service that validates with `schema`, answers
 with `problem+json`, and serves an OpenAPI document that embeds `json_schema` of
 the same nodes. Its end-to-end test generates requests *from that document* with
 Schemathesis. The first run found one defect in this repository that nothing here
@@ -259,7 +259,7 @@ test's reference is no longer bent on this point (it only adds the int64 bound),
 and it generates float-spelled integers; disabling float acceptance now fails it
 on every seed.
 
-**Also found, in `lexsys-web`'s example rather than here** (recorded there): an
+**Also found, in `cancho-web`'s example rather than here** (recorded there): an
 unknown query parameter had to be refused for the same reason unknown body fields
 are, and the document had to state the integer maximum the server enforces.
 
@@ -290,7 +290,7 @@ semantics agree cannot find the day they stop agreeing.
 
 ## 13. A constraint the store imposes belongs in the schema (U+0000)
 
-Found by Schemathesis against `lexsys-web`'s users service on PostgreSQL (`lexsys-pg`): the body
+Found by Schemathesis against `cancho-web`'s users service on PostgreSQL (`lexsys-pg`): the body
 `{"name":"\u0000"}` satisfies the schema -- a JSON string may hold U+0000, and `"type":"string"` accepts it
 -- and PostgreSQL `text` cannot store it. The first answer was a 503; correcting it to a 422 is wrong too,
 because the OpenAPI document says that body is valid, and a request the contract accepts and the service then
