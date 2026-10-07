@@ -9,7 +9,7 @@ env:
   # The compiler these sources are built and tested with. `vcs lock` pins
   # source hashes but not the bundled `std`, so the compiler version has to be
   # stated somewhere; here is where. Raising it is a deliberate act.
-  LEX_SYS_REV: bbeb75f6918105db6e49ec7c642f56009a911b8f
+  CANCHO_REV: a4572ea3b506e4bcec1c4be43deda1043c11ba9f
 
 jobs:
   test:
@@ -21,33 +21,33 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: alpibrusl/lex-sys
-          ref: ${{ env.LEX_SYS_REV }}
-          path: lex-sys
+          repository: alpibrusl/cancho
+          ref: ${{ env.CANCHO_REV }}
+          path: cancho
 
       - name: Cache the compiler
         id: compiler
         uses: actions/cache@v4
         with:
-          path: lex-sys/target/release/lex-sys
-          key: lex-sys-${{ env.LEX_SYS_REV }}
+          path: cancho/target/release/cancho
+          key: cancho-${{ env.CANCHO_REV }}
 
-      - name: Build lex-sys
+      - name: Build cancho
         if: steps.compiler.outputs.cache-hit != 'true'
-        working-directory: lex-sys
-        run: cargo build --release -p lex-sys
+        working-directory: cancho
+        run: cargo build --release -p cancho
 
       - name: Reference validator
         run: pip install jsonschema
 
       - name: Unit tests
         working-directory: schema
-        run: ../lex-sys/target/release/lex-sys test tests/schema_test.ls src/schema.ls --std
+        run: ../cancho/target/release/cancho test tests/schema_test.cho src/schema.cho --std
 
       - name: Differential tests against jsonschema
         working-directory: schema
         env:
-          LEX_SYS: ${{ github.workspace }}/lex-sys/target/release/lex-sys
+          CANCHO: ${{ github.workspace }}/cancho/target/release/cancho
         run: |
           for seed in 1 2 3 4; do
             python3 tests/differential.py --cases 250 --seed "$seed"
@@ -59,5 +59,5 @@ jobs:
         working-directory: schema
         run: |
           for e in quickstart validate; do
-            ../lex-sys/target/release/lex-sys run --std examples/$e.ls src/schema.ls | diff - examples/$e.out
+            ../cancho/target/release/cancho run --std examples/$e.cho src/schema.cho | diff - examples/$e.out
           done

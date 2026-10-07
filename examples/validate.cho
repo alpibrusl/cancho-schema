@@ -1,0 +1,102 @@
+import std.buffer;
+import std.io;
+import std.json;
+import schema;
+
+// `validate` -- the whole of cancho-schema in one runnable program.
+//
+//     cancho run --std examples/validate.cho src/schema.cho
+//
+// A `User` schema is built once, as data. Four request bodies are then checked
+// against it (each one: parse with std.json, `schema.validate`, and either "ok"
+// or the RFC 9457 problem document a service would answer with), and last the
+// same schema is printed as the JSON Schema 2020-12 document an OpenAPI file
+// would embed -- the validator and the documentation read one object.
+
+// One body, one verdict, written to `io`.
+fn check[&h, &i, &s, &b](heap: &!h Heap, io: &!i Io, sc: &s schema.Schema, root: int, label: &static [byte], body: &b [byte]) -> [heap, io_write] int {
+    io.write_all(io, label);
+    io.write_all(io, ": ");
+    let tape = box_slice(heap, json.tape_len(body), 0);
+    let slots = box_slice(heap, schema.slot_count(sc) + 1, 0);
+    let errs = box_slice(heap, schema.errors_len(16), 0);
+    borrow mut tape as &!tw in {
+        let t = contents(tw);
+        if json.parse(body, t) < 0 {
+            io.write_all(io, "not JSON\n");
+        } else {
+            borrow mut slots as &!sw in {
+                borrow mut errs as &!ew in {
+                    let e = contents(ew);
+                    if schema.validate(sc, root, body, t, contents(sw), e) == 0 {
+                        io.write_all(io, "ok\n");
+                    } else {
+                        let problem = schema.problem(heap, sc, body, t, e, 422, "Unprocessable Content");
+                        borrow problem as &pb in {
+                            io.write_all(io, buffer.bytes(pb));
+                        }
+                        buffer.drop(heap, problem);
+                        io.write_all(io, "\n");
+                    }
+                }
+            }
+        }
+    }
+    unbox_slice(heap, errs);
+    unbox_slice(heap, slots);
+    unbox_slice(heap, tape);
+    return 0;
+}
+
+// {"name": string 1..64, "email"?: string 3..120, "age"?: int 0..150,
+//  "role"?: "admin" | "user" | "guest", "tags"?: up to 8 strings of 1..16}
+// and no other key.
+fn user[&h](heap: &!h Heap) -> [heap] (schema.Schema, int) {
+    var s = schema.empty(heap);
+    let (s1, name) = schema.new_string(heap, s, 1, 64);
+    let (s2, email) = schema.new_string(heap, s1, 3, 120);
+    let (s3, age) = schema.new_int(heap, s2, 0, 150);
+    let (s4, role) = schema.new_string(heap, s3, 1, 5);
+    var sc = schema.add_choice(heap, s4, role, "admin");
+    sc = schema.add_choice(heap, sc, role, "user");
+    sc = schema.add_choice(heap, sc, role, "guest");
+    let (s5, tag) = schema.new_string(heap, sc, 1, 16);
+    let (s6, tags) = schema.new_array(heap, s5, tag, 0, 8);
+    let (s7, obj) = schema.new_object(heap, s6, true);
+    var out = schema.add_field(heap, s7, obj, "name", name, true);
+    out = schema.add_field(heap, out, obj, "email", email, false);
+    out = schema.add_field(heap, out, obj, "age", age, false);
+    out = schema.add_field(heap, out, obj, "role", role, false);
+    out = schema.add_field(heap, out, obj, "tags", tags, false);
+    return (out, obj);
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args } = split(world);
+    release(ffi);
+    release(fs);
+    release(args);
+    borrow mut heap as &!h in {
+        borrow mut io as &!i in {
+            let (sc, root) = user(h);
+            borrow sc as &s in {
+                check(h, i, s, root, "valid        ", "{\"name\":\"Ada\",\"age\":36,\"role\":\"admin\",\"tags\":[\"math\",\"code\"]}");
+                check(h, i, s, root, "two problems ", "{\"name\":\"\",\"age\":151}");
+                check(h, i, s, root, "nested path  ", "{\"name\":\"Ada\",\"tags\":[\"ok\",7]}");
+                check(h, i, s, root, "unknown key  ", "{\"name\":\"Ada\",\"admin\":true}");
+                check(h, i, s, root, "not JSON     ", "{\"name\":");
+                io.write_all(i, "\nJSON Schema 2020-12:\n");
+                let doc = schema.json_schema(h, s, root);
+                borrow doc as &db in {
+                    io.write_all(i, buffer.bytes(db));
+                }
+                buffer.drop(h, doc);
+                io.write_all(i, "\n");
+            }
+            schema.drop(h, sc);
+        }
+    }
+    release(io);
+    release(heap);
+    return 0;
+}

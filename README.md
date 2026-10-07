@@ -1,8 +1,8 @@
-# lexsys-schema
+# cancho-schema
 
-[![ci](https://github.com/alpibrusl/lexsys-schema/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lexsys-schema/actions/workflows/ci.yml)
+[![ci](https://github.com/alpibrusl/cancho-schema/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/cancho-schema/actions/workflows/ci.yml)
 
-A schema for [lex-sys](https://github.com/alpibrusl/lex-sys), written as **data**: one
+A schema for [cancho](https://github.com/alpibrusl/cancho), written as **data**: one
 value, built when the program starts, that drives
 
 * **validation** of a JSON body (`std.json` tape in, *every* error out, not the first),
@@ -11,17 +11,17 @@ value, built when the program starts, that drives
 
 so that what an API accepts and what its documentation says are the same object and
 cannot drift. It is the half of a FastAPI-shaped stack that
-[`lexsys-web`](https://github.com/alpibrusl/lexsys-web) builds on.
+[`cancho-web`](https://github.com/alpibrusl/cancho-web) builds on.
 
-No C: it is ordinary lex-sys over `std.json`, `std.buffer` and `std.vec`, and
-`lex-sys authority` on a program that validates a body reports **`heap` and nothing
+No C: it is ordinary cancho over `std.json`, `std.buffer` and `std.vec`, and
+`cancho authority` on a program that validates a body reports **`heap` and nothing
 else** -- no console, filesystem, network, command line or foreign code (checked, not
 assumed).
 
 ## Status
 
 Built: the builder, the validator, JSON-pointer error locations, `problem+json` and JSON Schema generation, all in
-[`src/schema.ls`](src/schema.ls), tested against an independent validator ([below](#tests)).
+[`src/schema.cho`](src/schema.cho), tested against an independent validator ([below](#tests)).
 [`docs/design.md`](docs/design.md) says what was decided and marks every claim as measured or not; sections 9 to 13 are what
 building against real services found.
 
@@ -29,7 +29,7 @@ Not built: see [Limitations](#limitations).
 
 ## Requirements
 
-- The **lex-sys** compiler at the revision this repository's CI builds with (below). A package store records no hash of the `std`
+- The **cancho** compiler at the revision this repository's CI builds with (below). A package store records no hash of the `std`
   it was published against, so the compiler revision is part of the contract.
 - Rust, to build that compiler (its `rust-toolchain.toml` pins the toolchain).
 - To run the differential test: `python3` and `pip install jsonschema`.
@@ -39,18 +39,18 @@ Not built: see [Limitations](#limitations).
 **1. Get the compiler**, at the revision CI builds and tests against (it is read from `ci.yml`, so it cannot drift from this text):
 
 ```
-git clone https://github.com/alpibrusl/lex-sys
-git clone https://github.com/alpibrusl/lexsys-schema && cd lexsys-schema
-REV=$(sed -n 's/^ *LEX_SYS_REV: *//p' .github/workflows/ci.yml)
-(cd ../lex-sys && git checkout "$REV" && cargo build --release -p lex-sys)
-export PATH=$PWD/../lex-sys/target/release:$PATH         # now `lex-sys` works
+git clone https://github.com/alpibrusl/cancho
+git clone https://github.com/alpibrusl/cancho-schema && cd cancho-schema
+REV=$(sed -n 's/^ *CANCHO_REV: *//p' .github/workflows/ci.yml)
+(cd ../cancho && git checkout "$REV" && cargo build --release -p cancho)
+export PATH=$PWD/../cancho/target/release:$PATH         # now `cancho` works
 ```
 
 **2. Run the smallest program** -- one schema, two bodies
-([`examples/quickstart.ls`](examples/quickstart.ls), 64 lines, 30 of them the `check` helper):
+([`examples/quickstart.cho`](examples/quickstart.cho), 64 lines, 30 of them the `check` helper):
 
 ```
-$ lex-sys run --std examples/quickstart.ls src/schema.ls
+$ cancho run --std examples/quickstart.cho src/schema.cho
 ok
 {"type":"about:blank","title":"Unprocessable Content","status":422,"count":3,"errors":[{"pointer":"/name","code":"required","detail":"is required"},{"pointer":"/age","code":"maximum","detail":"is above the maximum"},{"pointer":"/admin","code":"unknown","detail":"is not a known field"}]}
 ```
@@ -67,20 +67,20 @@ s = schema.add_field(h, s3, user, "name", name, true);    // required
 s = schema.add_field(h, s, user, "age", age, false);      // optional
 ```
 
-**3. Use it in your own project** -- no copy of `schema.ls`: lock the names you call, fetch them
+**3. Use it in your own project** -- no copy of `schema.cho`: lock the names you call, fetch them
 (`fetch` refuses a store that no longer matches the lock), build. Here with the example as the
 "app":
 
 ```
-mkdir ../myapp && cd ../myapp && cp ../lexsys-schema/examples/quickstart.ls app.ls
-STORE=../lexsys-schema/.lex-sys-vcs
-lex-sys vcs lock  --store $STORE -o schema.lock empty drop new_string new_int new_object add_field \
+mkdir ../myapp && cd ../myapp && cp ../cancho-schema/examples/quickstart.cho app.cho
+STORE=../cancho-schema/.cancho-vcs
+cancho vcs lock  --store $STORE -o schema.lock empty drop new_string new_int new_object add_field \
                                                validate problem slot_count errors_len
-lex-sys vcs fetch --lock schema.lock --store $STORE -o deps/
-lex-sys build --std app.ls deps/*.ls -o app && ./app         # the same two lines of output
+cancho vcs fetch --lock schema.lock --store $STORE -o deps/
+cancho build --std app.cho deps/*.cho -o app && ./app         # the same two lines of output
 ```
 
-**4. Take the full tour:** `lex-sys run --std examples/validate.ls src/schema.ls` adds a string
+**4. Take the full tour:** `cancho run --std examples/validate.cho src/schema.cho` adds a string
 enum, an array, a nested JSON Pointer, malformed JSON, and prints the schema as JSON Schema
 2020-12. Its output is below and CI checks it (`examples/validate.out`).
 
@@ -99,8 +99,8 @@ JSON Schema 2020-12:
 
 Two runnable programs, both checked in CI against their recorded output:
 
-- [`examples/quickstart.ls`](examples/quickstart.ls): one schema, two bodies, every error at once (step 2 above).
-- [`examples/validate.ls`](examples/validate.ls): a string enum, an array, a nested JSON Pointer, malformed JSON, and the schema
+- [`examples/quickstart.cho`](examples/quickstart.cho): one schema, two bodies, every error at once (step 2 above).
+- [`examples/validate.cho`](examples/validate.cho): a string enum, an array, a nested JSON Pointer, malformed JSON, and the schema
   printed as JSON Schema 2020-12 (step 4 above, output in [`examples/validate.out`](examples/validate.out)).
 
 ## Usage
@@ -149,8 +149,8 @@ let problem = schema.problem(heap, &s, body, t, errs, 422, "Unprocessable Conten
 let doc = schema.json_schema(heap, &s, user);               // JSON Schema 2020-12, deterministic
 ```
 
-The full program is [`examples/validate.ls`](examples/validate.ls); every call is also
-exercised in [`tests/schema_test.ls`](tests/schema_test.ls).
+The full program is [`examples/validate.cho`](examples/validate.cho); every call is also
+exercised in [`tests/schema_test.cho`](tests/schema_test.cho).
 
 ## API
 
@@ -201,23 +201,23 @@ in 64 bits -- an error, not a wrap), `nul` (U+0000 in a string that forbids it).
 ## Using it in another project
 
 Step 3 of the [quick start](#quick-start) is the whole consumer path. Lock the *names you
-call*; the closure they need comes with them. [`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s
-`deps/schema.lock` is a larger real one. Publishing a change is `rm -rf .lex-sys-vcs && lex-sys vcs
-publish --std --store .lex-sys-vcs src/schema.ls` (a store refuses a changed body, so it is
+call*; the closure they need comes with them. [`cancho-web`](https://github.com/alpibrusl/cancho-web)'s
+`deps/schema.lock` is a larger real one. Publishing a change is `rm -rf .cancho-vcs && cancho vcs
+publish --std --store .cancho-vcs src/schema.cho` (a store refuses a changed body, so it is
 regenerated), followed by re-locking every consumer -- the signatures do not change for a
 comment, but every source hash does.
 
 ## Tests
 
 ```
-lex-sys test tests/schema_test.ls src/schema.ls --std          # 20 unit tests
+cancho test tests/schema_test.cho src/schema.cho --std          # 20 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 
-(`pip install jsonschema`; `LEX_SYS=` names the compiler if it is not on `PATH`.)
+(`pip install jsonschema`; `CANCHO=` names the compiler if it is not on `PATH`.)
 
 The differential test generates random (schema, document) pairs, builds each schema both as
-JSON Schema and as a lex-sys program, and compares the *set of (pointer, code)* the two
+JSON Schema and as a cancho program, and compares the *set of (pointer, code)* the two
 report. 250 cases on each of 24 seeds agree. The same test also checks the generated JSON
 Schema: it must equal the schema the generator meant, and must give the reference the same
 verdicts the library's own validator gave. Both suites are mutation-checked: a deliberate
@@ -234,17 +234,17 @@ pinned compiler and runs the unit tests, four differential seeds and both exampl
 ## Layout
 
 ```
-src/schema.ls          the whole library: builder, validator, JSON Pointer, problem+json, JSON Schema
-tests/schema_test.ls   unit tests (lex-sys)
+src/schema.cho          the whole library: builder, validator, JSON Pointer, problem+json, JSON Schema
+tests/schema_test.cho   unit tests (cancho)
 tests/differential.py  random (schema, document) pairs against the jsonschema package
-examples/              quickstart.ls and validate.ls, with their recorded output
+examples/              quickstart.cho and validate.cho, with their recorded output
 docs/design.md         the design and what building it found
 ```
 
 ## Limitations
 
 Not built: `$ref` / `$defs` (a node used twice is written twice), bounds on floats, and assembling an OpenAPI document (that is
-[`lexsys-web`](https://github.com/alpibrusl/lexsys-web)'s job, from its routes plus these fragments). The list of errors is
+[`cancho-web`](https://github.com/alpibrusl/cancho-web)'s job, from its routes plus these fragments). The list of errors is
 bounded by the room you give `errs`; the count is always exact.
 
 ## Contributing
