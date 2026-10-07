@@ -290,7 +290,7 @@ semantics agree cannot find the day they stop agreeing.
 
 ## 13. A constraint the store imposes belongs in the schema (U+0000)
 
-Found by Schemathesis against `cancho-web`'s users service on PostgreSQL (`lexsys-pg`): the body
+Found by Schemathesis against `cancho-web`'s users service on PostgreSQL (`cancho-pg`): the body
 `{"name":"\u0000"}` satisfies the schema -- a JSON string may hold U+0000, and `"type":"string"` accepts it
 -- and PostgreSQL `text` cannot store it. The first answer was a 503; correcting it to a 422 is wrong too,
 because the OpenAPI document says that body is valid, and a request the contract accepts and the service then
