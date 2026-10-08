@@ -37,6 +37,14 @@ jobs:
         working-directory: cancho
         run: cargo build --release -p cancho
 
+      # The store under .cancho-vcs is what cancho-web and other consumers build from, not
+      # src/schema.cho; a source change that does not republish it reaches no one.
+      - name: The committed store is what src/schema.cho publishes
+        working-directory: schema
+        run: |
+          ../cancho/target/release/cancho vcs publish --std --store /tmp/store src/schema.cho >/dev/null
+          diff -r /tmp/store .cancho-vcs
+
       - name: Reference validator
         run: pip install jsonschema
 

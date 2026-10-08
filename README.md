@@ -181,6 +181,7 @@ exercised in [`tests/schema_test.cho`](tests/schema_test.cho).
 | `to_int(body, tape, at)` | the value of an integer slot (`150` and `150.0` alike), after `validate` said 0 |
 | `check_text(&s, node, text)` | judge a parameter that is text, not JSON (a path segment, a query value, a header) against a scalar node: 0, or the first error code. Integer (decimal digits only, no `5.0`), bool (`true`/`false`), string (well-formed UTF-8, code points, `add_choice`, `forbid_nul`); `text` must already be percent-decoded |
 | `int_of_text(text)` / `bool_of_text(text)` | the value, after `check_text` said 0 |
+| `is_int(&s, node)` / `is_bool(&s, node)` / `is_string(&s, node)` | which scalar a node is (none of them for `any`, `number`, an array or an object) |
 
 Error codes: `type`, `required`, `unknown`, `minimum`, `maximum`, `min_length`,
 `max_length`, `choice`, `min_items`, `max_items`, `range` (an integer that does not fit
@@ -212,7 +213,7 @@ comment, but every source hash does.
 ## Tests
 
 ```
-cancho test tests/schema_test.cho src/schema.cho --std          # 20 unit tests
+cancho test tests/schema_test.cho src/schema.cho --std          # 29 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 

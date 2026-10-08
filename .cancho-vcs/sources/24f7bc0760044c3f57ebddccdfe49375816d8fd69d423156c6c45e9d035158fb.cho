@@ -35,6 +35,7 @@
 module schema;
 
 import std.buffer;
+import std.bytes;
 import std.json;
 import std.vec;
 
@@ -666,6 +667,225 @@ pub fn to_int[&b, &t](body: &b [byte], tape: &t [int], at: int) -> [] int {
         return truncate(json.to_float(body, tape, at));
     }
     return 0;
+}
+
+// ---------------------------------------------------------------------
+// Text that is not JSON: a path segment, a query value, a header
+// ---------------------------------------------------------------------
+//
+// `docs/design.md` §14. A parameter of an HTTP request arrives as text, with no tape, and
+// the node that documents it is the node that must judge it. `check_text` is `check` for a
+// scalar node and a byte string: the same codes, the same bounds, no coercion. The text is what
+// the caller hands over, *already decoded* (percent-decoding needs a destination buffer, and a
+// validator that allocates would not be this one); a header needs none.
+
+// `text` as a decimal integer: `(0, 0)` if it is not one (an optional `-`, then one or more
+// ASCII digits and nothing else), `(1, value)` if it fits an `int`, `(2, 0)` if it does not.
+// `+5`, `5.0`, ` 5`, `0x5` and the empty text are not integers. Leading zeros are digits.
+// The magnitude is built and checked against `int_max()` before each step, so nothing wraps.
+// (`-9223372036854775808` is therefore `(2, 0)`: the one value a magnitude cannot hold.)
+fn parse_decimal[&t](text: &t [byte]) -> [] (int, int) {
+    var i = 0;
+    var neg = false;
+    if len(text) > 0 && int_of(text[0]) == 45 {
+        neg = true;
+        i = 1;
+    }
+    if i >= len(text) {
+        return (0, 0);
+    }
+    var n = 0;
+    var fits = true;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 {
+            return (0, 0);
+        }
+        if fits {
+            let d = c - 48;
+            if n > (int_max() - d) / 10 {
+                fits = false;
+            } else {
+                n = n * 10 + d;
+            }
+        }
+        i = i + 1;
+    }
+    if !fits {
+        return (2, 0);
+    }
+    if neg {
+        return (1, 0 - n);
+    }
+    return (1, n);
+}
+
+// How many code points `text` holds if it is well-formed UTF-8 (shortest forms only, no
+// surrogate, nothing past U+10FFFF), else -1. JSON text arrives checked by `std.json`; a
+// header or a decoded path segment has not been checked by anyone.
+fn utf8_points[&t](text: &t [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(text) {
+        let c = int_of(text[i]);
+        var need = 0;
+        var cp = c;
+        if c >= 128 {
+            if c >= 194 && c <= 223 {
+                need = 1;
+                cp = c & 31;
+            } else if c >= 224 && c <= 239 {
+                need = 2;
+                cp = c & 15;
+            } else if c >= 240 && c <= 244 {
+                need = 3;
+                cp = c & 7;
+            } else {
+                return 0 - 1;
+            }
+        }
+        if i + need >= len(text) {
+            return 0 - 1;
+        }
+        var k = 1;
+        while k <= need {
+            let b = int_of(text[i + k]);
+            if b & 192 != 128 {
+                return 0 - 1;
+            }
+            cp = cp * 64 + (b & 63);
+            k = k + 1;
+        }
+        if need == 2 && cp < 2048 {
+            return 0 - 1;
+        }
+        if need == 3 && (cp < 65536 || cp > 1114111) {
+            return 0 - 1;
+        }
+        if cp >= 55296 && cp <= 57343 {
+            return 0 - 1;
+        }
+        n = n + 1;
+        i = i + need + 1;
+    }
+    return n;
+}
+
+fn text_has_nul[&t](text: &t [byte]) -> [] bool {
+    var i = 0;
+    while i < len(text) {
+        if int_of(text[i]) == 0 {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn text_is_member[&s, &t](s: &s Schema, node: int, text: &t [byte]) -> [] bool {
+    var m = node_at(s, node, 4);
+    let pool = buffer.bytes(s.text);
+    while m >= 0 {
+        let off = vec.get(s.members, m * member_width());
+        let n = vec.get(s.members, m * member_width() + 1);
+        if bytes.equal(pool[off..off + n], text) {
+            return true;
+        }
+        m = vec.get(s.members, m * member_width() + 2);
+    }
+    return false;
+}
+
+// What kind of scalar a node is, for a caller that keeps the value of a parameter in the shape its
+// node says (`cancho-web`'s slot table): an integer, a bool, a string. A node that is none of them
+// (`any`, `number`, an array, an object) is none of the three.
+pub fn is_int[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_int();
+}
+
+pub fn is_bool[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_bool();
+}
+
+pub fn is_string[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_string();
+}
+
+// Judge `text` against the scalar node `node`: 0 if it is a value of the node, else the code
+// of the first thing wrong (`err_type`, `err_range`, `err_minimum`, `err_maximum`,
+// `err_min_length`, `err_max_length`, `err_choice`, `err_nul`), in that order per kind.
+//
+//   * integer: `parse_decimal`'s spelling, then the node's bounds. `150.0` is *not* accepted:
+//     JSON's `150.0` is a number whose value is whole, and a query string has no such thing.
+//   * bool: exactly `true` or `false`.
+//   * string: well-formed UTF-8 (else `type`), then length in code points, `add_choice`, and
+//     `forbid_nul`, as for a body.
+//   * any: everything. A number, array or object node is not something a parameter can be:
+//     `type` for every text, so a mistaken declaration refuses rather than accepts.
+//
+// Nullability is not consulted: text has no `null`.
+pub fn check_text[&s, &t](s: &s Schema, node: int, text: &t [byte]) -> [] int {
+    let kind = node_at(s, node, 0);
+    if kind == kind_any() {
+        return 0;
+    }
+    if kind == kind_bool() {
+        if bytes.equal(text, "true") || bytes.equal(text, "false") {
+            return 0;
+        }
+        return err_type();
+    }
+    if kind == kind_int() {
+        let (shape, value) = parse_decimal(text);
+        if shape == 0 {
+            return err_type();
+        }
+        if shape == 2 {
+            return err_range();
+        }
+        if value < node_at(s, node, 2) {
+            return err_minimum();
+        }
+        if value > node_at(s, node, 3) {
+            return err_maximum();
+        }
+        return 0;
+    }
+    if kind == kind_string() {
+        let n = utf8_points(text);
+        if n < 0 {
+            return err_type();
+        }
+        if n < node_at(s, node, 2) {
+            return err_min_length();
+        }
+        if n > node_at(s, node, 3) {
+            return err_max_length();
+        }
+        if node_at(s, node, 4) >= 0 && !text_is_member(s, node, text) {
+            return err_choice();
+        }
+        if node_at(s, node, 6) == 1 && text_has_nul(text) {
+            return err_nul();
+        }
+        return 0;
+    }
+    return err_type();
+}
+
+// The integer `text` spells, for a text `check_text` said 0 about on an integer node; 0 for
+// anything else, as `to_int` is for a body.
+pub fn int_of_text[&t](text: &t [byte]) -> [] int {
+    let (shape, value) = parse_decimal(text);
+    if shape == 1 {
+        return value;
+    }
+    return 0;
+}
+
+// Whether `text` is `true`, for a text `check_text` said 0 about on a bool node.
+pub fn bool_of_text[&t](text: &t [byte]) -> [] bool {
+    return bytes.equal(text, "true");
 }
 
 // Check the value at tape node `at` against schema node `node`. `track` says

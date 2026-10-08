@@ -735,3 +735,25 @@ fn test_text_other_kinds[&h](heap: &!h Heap) -> [heap] int {
     schema.drop(heap, s);
     return 0;
 }
+
+fn test_a_node_says_which_scalar_it_is[&h](heap: &!h Heap) -> [heap] int {
+    var s = schema.empty(heap);
+    let (s1, n) = schema.new_int(heap, s, 0, 9);
+    let (s2, b) = schema.new_bool(heap, s1);
+    let (s3, str) = schema.new_string(heap, s2, 0, 9);
+    let (s4, any) = schema.new_any(heap, s3);
+    let (s5, arr) = schema.new_array(heap, s4, n, 0, 1);
+    s = s5;
+    borrow s as &sr in {
+        test.assert(schema.is_int(sr, n));
+        test.assert(!schema.is_int(sr, b));
+        test.assert(!schema.is_int(sr, str));
+        test.assert(schema.is_bool(sr, b));
+        test.assert(!schema.is_bool(sr, n));
+        test.assert(schema.is_string(sr, str));
+        test.assert(!schema.is_string(sr, any));
+        test.assert(!schema.is_int(sr, arr) && !schema.is_bool(sr, arr) && !schema.is_string(sr, arr));
+    }
+    schema.drop(heap, s);
+    return 0;
+}
