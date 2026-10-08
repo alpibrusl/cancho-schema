@@ -796,6 +796,21 @@ fn text_is_member[&s, &t](s: &s Schema, node: int, text: &t [byte]) -> [] bool {
     return false;
 }
 
+// What kind of scalar a node is, for a caller that keeps the value of a parameter in the shape its
+// node says (`cancho-web`'s slot table): an integer, a bool, a string. A node that is none of them
+// (`any`, `number`, an array, an object) is none of the three.
+pub fn is_int[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_int();
+}
+
+pub fn is_bool[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_bool();
+}
+
+pub fn is_string[&s](s: &s Schema, node: int) -> [] bool {
+    return node_at(s, node, 0) == kind_string();
+}
+
 // Judge `text` against the scalar node `node`: 0 if it is a value of the node, else the code
 // of the first thing wrong (`err_type`, `err_range`, `err_minimum`, `err_maximum`,
 // `err_min_length`, `err_max_length`, `err_choice`, `err_nul`), in that order per kind.
