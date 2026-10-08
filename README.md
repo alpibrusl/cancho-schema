@@ -212,7 +212,7 @@ comment, but every source hash does.
 ## Tests
 
 ```
-cancho test tests/schema_test.cho src/schema.cho --std          # 20 unit tests
+cancho test tests/schema_test.cho src/schema.cho --std          # 28 unit tests
 python3 tests/differential.py --cases 250 --seed 1             # vs the jsonschema package
 ```
 
