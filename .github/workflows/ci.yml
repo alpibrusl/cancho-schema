@@ -9,7 +9,7 @@ env:
   # The compiler these sources are built and tested with. `vcs lock` pins
   # source hashes but not the bundled `std`, so the compiler version has to be
   # stated somewhere; here is where. Raising it is a deliberate act.
-  CANCHO_REV: dcf6751951590aa7f3427001eca3bef0d6677f3b
+  CANCHO_REV: 2bd251f7f9354fe43d48055b3d9fe4d4af007a5c
 
 jobs:
   test:
